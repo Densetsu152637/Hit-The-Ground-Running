@@ -94,6 +94,6 @@ test('status: meters and markers read at a glance', async ($, on) => {
   await measure($, r, [five(72, NOW + 2 * HOUR), week(30, NOW + 48 * HOUR)])
   const line = r.statuses.at(-1) ?? ''
   expect(line).toContain('🟢 Gate open')
-  expect(line).toContain('5h ▰▰▰▰▰▰▱▱ 72% ⚠')
-  expect(line).toContain('wk ▰▰▱▱▱▱▱▱ 30%')
+  expect(line).toContain('5h ▰▰▰▰▱ 72% ⚠')
+  expect(line).toContain('wk ▰▰▱▱▱ 30%')
 })
