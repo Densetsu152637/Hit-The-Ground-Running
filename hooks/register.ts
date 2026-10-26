@@ -104,7 +104,7 @@ const gateText = (eff: readonly Effective[], now: number): string =>
 
 const setStatus = ($: EngineInterface, now: number) => {
   try {
-    const parts = ['HTGR']
+    const parts: string[] = []
     if (s.eff.length === 0) parts.push('no usage reading yet')
     else parts.push(s.eff.map(x => `${SHORT[x.kind]} ${Math.round(x.percent)}%`).join(' '))
     parts.push(s.gated ? 'gate CLOSED' : 'gate open')

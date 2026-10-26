@@ -18,7 +18,7 @@ Notes are edge-triggered, once per window per reset period. A jump from below th
 
 While the gate is closed the mod answers `{ deny }` to the `Agent` tool and to `agent.spawn` (workflow agents and teammates included). A resumed agent is not a new one and passes. The hooks fail open, as Claude Code hooks do, except that each carries a `.catch` that refuses only while the gate is closed, so a failed check never blocks spawning when usage is low.
 
-The status line shows a compact reading: `HTGR · 5h 62% wk 41% · gate open · resume 06:03 (in 2h14m)`.
+The status line shows a compact reading after the mod's name: `5h 62% wk 41% · gate open · resume 06:03 (in 2h14m)`.
 
 ## Auto-resume
 
