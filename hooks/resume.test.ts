@@ -9,7 +9,7 @@ const reset5 = NOW + 2 * HOUR
 
 type Saved = { sessionId: string; resetsAt: number; fireAt: number; reason: string; attempts: number; owner: string }
 
-test('halt: a rate_limit stop at a plan cap (>=98% with a reset ahead) schedules a resume (mod mode) and persists it', { options: MOD }, async ($, on) => {
+test('halt: a rate_limit stop at a plan cap (at or above the gate tier with a reset ahead) schedules a resume (mod mode) and persists it', { options: MOD }, async ($, on) => {
   const r = await rig($, on, { rateLimits: [five(99, reset5)] })
   await halt($)
   const saved = (await stored($, r, KEY)) as Saved | undefined
@@ -20,6 +20,12 @@ test('halt: a rate_limit stop at a plan cap (>=98% with a reset ahead) schedules
   expect(saved!.fireAt - reset5).toBeLessThanOrEqual(90_000)
   expect(r.statuses.at(-1)).toContain('resume')
   expect(r.toasts.some(t => t.includes('Auto-resume armed'))).toBe(true)
+})
+
+test('halt: a stale pre-halt reading below 100% but at the gate tier still counts as a cap', { options: MOD }, async ($, on) => {
+  const r = await rig($, on, { rateLimits: [five(88, reset5)] })
+  await halt($)
+  expect(await stored($, r, KEY)).toMatchObject({ resetsAt: reset5, reason: 'rate_limit-5h' })
 })
 
 test('halt: a transient 429 (usage well under the cap) is ignored', { options: MOD }, async ($, on) => {

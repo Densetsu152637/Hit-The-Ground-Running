@@ -1,7 +1,7 @@
 import type { EngineInterface, Register, SessionRateLimit, Timer } from 'claude-code'
 
 import {
-  CAP_PERCENT, COMPACT_ABOVE, GATE, LABEL, MAX_REARMS, SHORT, WARN,
+  COMPACT_ABOVE, GATE, LABEL, MAX_REARMS, SHORT, WARN,
   contextPercent, effective, fmtClock, fmtDuration, gating, jitter, levelOf, parseWhen, pct,
 } from './logic'
 import type { Effective, Kind } from './logic'
@@ -392,14 +392,15 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => (!next.called && s.gated && !e.resume ? { deny: GATE_DENY } : next(e)))
 
-  // Halt detection: a rate_limit stop is a plan cap only when a window reads at the cap with a reset still ahead.
+  // Halt detection: a rate_limit stop is a plan cap only when a window reads at its gate tier with a reset still ahead
+  // (the last reading before a cap is often below 100%; a transient 429 below the gate is ignored).
   on('classic.StopFailure', async ($, e, next) => {
     if (e.error === 'rate_limit' && e.agent_id === undefined) {
       try {
         const now = await $.clock.now()
         const usage = await $.session.usage()
         const eff = effective(usage.rateLimits, now)
-        const capped = eff.filter(x => x.raw >= CAP_PERCENT && x.resetsAt !== undefined && x.resetsAt > now)
+        const capped = eff.filter(x => x.raw >= GATE[x.kind] && x.resetsAt !== undefined && x.resetsAt > now)
         if (capped.length > 0) {
           s.sid ||= await $.session.id()
           const resetsAt = Math.max(...capped.map(x => x.resetsAt as number))

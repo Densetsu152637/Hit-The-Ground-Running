@@ -11,8 +11,6 @@ export const SHORT: Readonly<Record<Kind, string>> = { five_hour: '5h', seven_da
 export const WARN: Readonly<Record<Kind, number>> = { five_hour: 70, seven_day: 90 }
 /** Gate tiers: the agent-pool usage gate of the workflow closes (no new subagents). */
 export const GATE: Readonly<Record<Kind, number>> = { five_hour: 85, seven_day: 95 }
-/** A rate_limit stop counts as a plan cap, not a transient 429, when a window reads at least this. */
-export const CAP_PERCENT = 98
 /** Compaction runs only when the context window is more than this full. */
 export const COMPACT_ABOVE = 25
 /** Resume fires this long after the reset, spread so that many sessions do not wake together. */

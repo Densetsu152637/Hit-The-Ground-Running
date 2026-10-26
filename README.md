@@ -24,7 +24,7 @@ The status line shows a compact reading: `HTGR · 5h 62% wk 41% · gate open · 
 
 A resume is scheduled from three sources:
 
-1. **A rate-limit cap.** On a `StopFailure` with `error: "rate_limit"` the mod reads this session's usage. Only if some window reads at least 98% with a reset still ahead is it treated as a plan cap; a transient 429 is ignored and nothing is scheduled.
+1. **A rate-limit cap.** On a `StopFailure` with `error: "rate_limit"` the mod reads this session's usage. Only if some window reads at or above its gate tier (5-hour 85%, weekly 95%) with a reset still ahead is it treated as a plan cap; a transient 429 is ignored and nothing is scheduled.
 2. **`/htgr-pause`** (see below).
 3. **A stored schedule.** The schedule is kept in the mod's store (`{ sessionId, resetsAt, reason, attempts }` plus the fire time), so an app restart or a mod reload re-arms it when the session starts again. A schedule more than a day overdue is dropped.
 
