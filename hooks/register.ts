@@ -2,7 +2,7 @@ import type { EngineInterface, Register, SessionRateLimit, Timer } from 'claude-
 
 import {
   COMPACT_ABOVE, GATE, LABEL, MAX_REARMS, SHORT, WARN,
-  contextPercent, effective, fmtClock, fmtDuration, gating, jitter, levelOf, parseWhen, pct,
+  contextPercent, effective, fmtClock, fmtDuration, gating, jitter, levelOf, meter, parseWhen, pct,
 } from './logic'
 import type { Effective, Kind } from './logic'
 
@@ -104,14 +104,14 @@ const gateText = (eff: readonly Effective[], now: number): string =>
 
 const setStatus = ($: EngineInterface, now: number) => {
   try {
-    const parts: string[] = []
-    if (s.eff.length === 0) parts.push('no usage reading yet')
-    else parts.push(s.eff.map(x => `${SHORT[x.kind]} ${Math.round(x.percent)}%`).join(' '))
-    parts.push(s.gated ? 'gate CLOSED' : 'gate open')
+    // Plain text is all a status line takes: block meters and colored dots stand in for a drawing.
+    const parts = [s.gated ? '🔴 Gate closed' : '🟢 Gate open']
+    if (s.eff.length === 0) parts.push('waiting for a usage reading')
+    else parts.push(...s.eff.map(x => `${SHORT[x.kind]} ${meter(x.percent)} ${Math.round(x.percent)}%${levelOf(x.kind, x.percent) === 1 ? ' ⚠' : ''}`))
     const r = s.resume
-    if (r?.owner === 'mod') parts.push(`resume ${fmtClock(r.fireAt, now)} (in ${fmtDuration(r.fireAt - now)})`)
-    else if (r?.owner === 'native') parts.push(`native resume ~${fmtClock(r.resetsAt, now)}`)
-    $.ui.status(parts.join(' · '))
+    if (r?.owner === 'mod') parts.push(`⏰ Resume ${fmtClock(r.fireAt, now)} (in ${fmtDuration(r.fireAt - now)})`)
+    else if (r?.owner === 'native') parts.push(`⏰ Native resume ~${fmtClock(r.resetsAt, now)}`)
+    $.ui.status(parts.join('  ·  '))
   } catch { /* no status line on this surface */ }
 }
 

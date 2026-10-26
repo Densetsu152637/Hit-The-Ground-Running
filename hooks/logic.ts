@@ -54,6 +54,12 @@ export const levelOf = (kind: Kind, percent: number): 0 | 1 | 2 => (percent >= G
 /** Windows that keep the gate closed now. */
 export const gating = (eff: readonly Effective[]): Effective[] => eff.filter(x => levelOf(x.kind, x.percent) === 2)
 
+/** An eight-cell text meter of a percentage, `▰▰▰▱▱▱▱▱`; any use shows at least one cell. */
+export const meter = (percent: number, cells = 8): string => {
+  const filled = percent <= 0 ? 0 : Math.min(cells, Math.max(1, Math.round((percent / 100) * cells)))
+  return '▰'.repeat(filled) + '▱'.repeat(cells - filled)
+}
+
 export const pct = (n: number): string => `${Math.round(n * 10) / 10}%`
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']

@@ -29,7 +29,7 @@ test('tiers: crossing the 5-hour gate at 85% closes it once, with a note, a toas
   await measure($, r, [five(97, reset5)])
   expect(notes(r)).toHaveLength(2)
   expect(r.toasts.filter(t => t.includes('gate closed'))).toHaveLength(1)
-  expect(r.statuses.at(-1)).toContain('gate CLOSED')
+  expect(r.statuses.at(-1)).toContain('🔴 Gate closed')
 })
 
 test('tiers: a jump from below the warn tier to the gate tier gives the gate note alone', async ($, on) => {
@@ -77,7 +77,7 @@ test('tiers: a reading frozen from before the reset counts as reset once its tim
   // No new response arrives; the reading stays at 92% but its reset is now in the past.
   await r.clock.advance(2 * HOUR + MIN)
   expect(notes(r).at(-1)).toContain('gate reopened')
-  expect(r.statuses.at(-1)).toContain('gate open')
+  expect(r.statuses.at(-1)).toContain('🟢 Gate open')
 })
 
 test('tiers: tier state survives a reload of the session start, so a note is not repeated', async ($, on) => {
@@ -87,4 +87,13 @@ test('tiers: tier state survives a reload of the session start, so a note is not
   // The mod reloads: session.start runs again over the same stored tiers.
   await $.session.start({ source: 'startup', cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
   expect(notes(r)).toHaveLength(1)
+})
+
+test('status: meters and markers read at a glance', async ($, on) => {
+  const r = await rig($, on)
+  await measure($, r, [five(72, NOW + 2 * HOUR), week(30, NOW + 48 * HOUR)])
+  const line = r.statuses.at(-1) ?? ''
+  expect(line).toContain('🟢 Gate open')
+  expect(line).toContain('5h ▰▰▰▰▰▰▱▱ 72% ⚠')
+  expect(line).toContain('wk ▰▰▱▱▱▱▱▱ 30%')
 })

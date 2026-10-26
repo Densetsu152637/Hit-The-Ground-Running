@@ -18,7 +18,7 @@ test('halt: a rate_limit stop at a plan cap (at or above the gate tier with a re
   // The resume time is the reset plus 30 to 90 seconds of jitter.
   expect(saved!.fireAt - reset5).toBeGreaterThanOrEqual(30_000)
   expect(saved!.fireAt - reset5).toBeLessThanOrEqual(90_000)
-  expect(r.statuses.at(-1)).toContain('resume')
+  expect(r.statuses.at(-1)).toContain('⏰ Resume')
   expect(r.toasts.some(t => t.includes('Auto-resume armed'))).toBe(true)
 })
 
@@ -76,7 +76,7 @@ test('resume: the schedule is re-armed from the store when the session starts ag
   const fireAt = NOW + HOUR
   const saved: Saved = { sessionId: SID, resetsAt: fireAt - 40_000, fireAt, reason: 'rate_limit-5h', attempts: 0, owner: 'mod' }
   const r = await rig($, on, { store: { [KEY]: { ...saved, haltedAt: NOW - HOUR } }, rateLimits: [five(5, NOW + 5 * HOUR)] })
-  expect(r.statuses.at(-1)).toContain('resume')
+  expect(r.statuses.at(-1)).toContain('⏰ Resume')
   await r.clock.advance(HOUR - 1000)
   expect(r.submitted).toEqual([])
   await r.clock.advance(2000)
