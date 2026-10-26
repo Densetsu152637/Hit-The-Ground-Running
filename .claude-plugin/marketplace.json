@@ -1,0 +1,13 @@
+{
+  "name": "hit-the-ground-running",
+  "owner": {
+    "name": "Densetsu152637"
+  },
+  "description": "hit-the-ground-running: a Claude Code mod that gates subagent spawns near a usage limit and resumes the session, compacting first, after a cap resets.",
+  "plugins": [
+    {
+      "name": "hit-the-ground-running",
+      "source": "./"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "name": "hit-the-ground-running",
+  "version": "0.1.0",
+  "description": "Hit The Ground Running: pushes the plan's 5-hour and weekly usage to the model, closes the agent-pool gate (no new subagents) near a limit, and resumes the session after a cap resets, compacting first when the context is large.",
+  "author": {
+    "name": "Densetsu152637",
+    "url": "https://github.com/Densetsu152637"
+  },
+  "userConfig": {
+    "fiveHourResume": {
+      "type": "string",
+      "title": "5-hour cap resume",
+      "description": "native: Claude's own auto-continue resumes 5-hour caps and the mod only compacts before it. mod: the mod resumes 5-hour caps itself; turn the native auto-continue off to avoid a double resume.",
+      "default": "native",
+      "options": [
+        "native",
+        "mod"
+      ]
+    },
+    "weeklyResume": {
+      "type": "string",
+      "title": "Weekly cap resume",
+      "description": "on: the mod resumes the session after a weekly cap resets. off: it does not.",
+      "default": "on",
+      "options": [
+        "on",
+        "off"
+      ]
+    }
+  },
+  "homepage": "https://github.com/Densetsu152637/Hit-The-Ground-Running",
+  "repository": "https://github.com/Densetsu152637/Hit-The-Ground-Running",
+  "license": "MIT"
+}
