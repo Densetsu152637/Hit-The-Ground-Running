@@ -78,11 +78,13 @@ const freshState = () => ({
   deferrals: 0,
   firing: false,
   mainTurn: '',
+  /** The 5-hour reset whose period this session was already auto-paused in, epoch ms (0: none). */
+  pausedFor: 0,
 })
 
 let s = freshState()
 
-const cfg = { ownsFiveHour: false, resumesWeekly: true }
+const cfg = { ownsFiveHour: false, resumesWeekly: true, autoPauseAt: null as number | null }
 
 const resumeKey = () => `resume:${s.sid}`
 const tiersKey = () => `tiers:${s.sid}`
@@ -120,7 +122,7 @@ const refreshStatus = async ($: EngineInterface) => setStatus($, await $.clock.n
 // ---- usage tiers and the gate -----------------------------------------------------------------------------------
 
 const persistTiers = async ($: EngineInterface) => {
-  await $.store.set(tiersKey(), { tiers: s.tiers, gated: s.gated })
+  await $.store.set(tiersKey(), { tiers: s.tiers, gated: s.gated, pausedFor: s.pausedFor })
 }
 
 /** Compares a reading with the tiers: one note per tier crossing per reset period, one when the gate reopens. */
@@ -172,6 +174,7 @@ const evaluate = async ($: EngineInterface, readings: readonly SessionRateLimit[
   }
   await persistTiers($)
   setStatus($, now)
+  await autoPause($, eff, now)
 }
 
 const recheck = async ($: EngineInterface) => {
@@ -290,6 +293,38 @@ const fire = async ($: EngineInterface) => {
   }
 }
 
+/** Schedules a mod resume at `resetsAt` (plus `spread`) and stops the running main turn, if any. */
+const pauseUntil = async ($: EngineInterface, now: number, resetsAt: number, spread: number): Promise<string> => {
+  await schedule($, { resetsAt, reason: 'pause', attempts: 0, haltedAt: now, owner: 'mod' }, spread)
+  let stopped = ''
+  if (s.mainTurn) {
+    try {
+      await $.turn.abort({ turnId: s.mainTurn })
+      stopped = 'Stopped the running turn. '
+    } catch {
+      stopped = 'Could not stop the running turn (press stop yourself). '
+    }
+  }
+  const at = s.resume?.fireAt ?? resetsAt
+  return `${stopped}Resume scheduled for ${fmtClock(at, now)} (in ${fmtDuration(at - now)}). Keep the computer awake; any prompt you type cancels it, as does /htgr-cancel.`
+}
+
+/**
+ * The automatic /htgr-pause: once per 5-hour period, a session whose main turn is running when the 5-hour reading
+ * reaches the auto-pause tier is stopped and resumed after the reset. An idle session has nothing to stop; it pauses
+ * on its first response if it starts working in the same period. Typing after a pause cancels it for that period.
+ */
+const autoPause = async ($: EngineInterface, eff: readonly Effective[], now: number) => {
+  const at = cfg.autoPauseAt
+  const x = eff.find(w => w.kind === 'five_hour')
+  if (at === null || !x || x.isExpired || x.resetsAt === undefined || x.percent < at) return
+  if (!s.mainTurn || s.resume || Math.abs(s.pausedFor - x.resetsAt) <= PERIOD_SLACK_MS) return
+  s.pausedFor = x.resetsAt
+  await persistTiers($)
+  const text = await pauseUntil($, now, x.resetsAt, jitter())
+  toast($, `5-hour usage ${pct(x.percent)}: auto-paused at ${at}% (Hit The Ground Running). ${text}`, 15_000)
+}
+
 const rehydrate = async ($: EngineInterface) => {
   const saved = await $.store.get(resumeKey())
   if (saved === undefined) return
@@ -312,6 +347,8 @@ export const register: Register = (on, options) => {
   s = freshState()
   cfg.ownsFiveHour = options.fiveHourResume === 'mod'
   cfg.resumesWeekly = options.weeklyResume !== 'off'
+  const pauseAt = Number(options.autoPause)
+  cfg.autoPauseAt = Number.isFinite(pauseAt) && pauseAt > 0 ? pauseAt : null
 
   // ---- hooks ------------------------------------------------------------------------------------------------------
 
@@ -335,10 +372,11 @@ export const register: Register = (on, options) => {
         description: 'Cancel the pending automatic resume (Hit The Ground Running)',
         immediate: true,
       })
-      const savedTiers = (await $.store.get(tiersKey())) as { tiers?: Partial<Record<Kind, Tier>>; gated?: boolean } | undefined
+      const savedTiers = (await $.store.get(tiersKey())) as { tiers?: Partial<Record<Kind, Tier>>; gated?: boolean; pausedFor?: number } | undefined
       if (savedTiers && typeof savedTiers === 'object') {
         s.tiers = savedTiers.tiers ?? {}
         s.gated = savedTiers.gated === true
+        s.pausedFor = typeof savedTiers.pausedFor === 'number' ? savedTiers.pausedFor : 0
       }
       await rehydrate($)
       await recheck($)
@@ -460,7 +498,7 @@ export const register: Register = (on, options) => {
     if (!r) lines.push('resume    none pending')
     else if (r.owner === 'mod') lines.push(`resume    ${fmtClock(r.fireAt, now)} (in ${fmtDuration(r.fireAt - now)}), ${r.reason}, re-arms ${r.attempts}/${MAX_REARMS}; /htgr-cancel stops it`)
     else lines.push(`resume    left to the native auto-continue (~${fmtClock(r.resetsAt, now)}); no compaction in native mode`)
-    lines.push(`options   fiveHourResume=${cfg.ownsFiveHour ? 'mod' : 'native'} weeklyResume=${cfg.resumesWeekly ? 'on' : 'off'}`)
+    lines.push(`options   fiveHourResume=${cfg.ownsFiveHour ? 'mod' : 'native'} weeklyResume=${cfg.resumesWeekly ? 'on' : 'off'} autoPause=${cfg.autoPauseAt ?? 'off'}`)
     return { text: lines.join('\n') }
   })
 
@@ -483,17 +521,6 @@ export const register: Register = (on, options) => {
       resetsAt = five.resetsAt
       spread = jitter()
     }
-    await schedule($, { resetsAt, reason: 'pause', attempts: 0, haltedAt: now, owner: 'mod' }, spread)
-    let stopped = ''
-    if (s.mainTurn) {
-      try {
-        await $.turn.abort({ turnId: s.mainTurn })
-        stopped = 'Stopped the running turn. '
-      } catch {
-        stopped = 'Could not stop the running turn (press stop yourself). '
-      }
-    }
-    const at = s.resume?.fireAt ?? resetsAt
-    return { text: `${stopped}Resume scheduled for ${fmtClock(at, now)} (in ${fmtDuration(at - now)}). Keep the computer awake; any prompt you type cancels it, as does /htgr-cancel.` }
+    return { text: await pauseUntil($, now, resetsAt, spread) }
   })
 }

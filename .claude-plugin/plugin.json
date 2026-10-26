@@ -1,7 +1,7 @@
 {
   "name": "hit-the-ground-running",
-  "version": "0.1.3",
-  "description": "Hit The Ground Running: pushes the plan's 5-hour and weekly usage to the model, closes the agent-pool gate (no new subagents) near a limit, and resumes the session after a cap resets, compacting first when the context is large.",
+  "version": "0.2.0",
+  "description": "Hit The Ground Running: pushes the plan's 5-hour and weekly usage to the model, closes the agent-pool gate (no new subagents) near a limit, pauses running sessions at 90% of the 5-hour limit, and resumes the session after a cap resets, compacting first when the context is large.",
   "author": {
     "name": "Densetsu152637",
     "url": "https://github.com/Densetsu152637"
@@ -15,6 +15,18 @@
       "options": [
         "native",
         "mod"
+      ]
+    },
+    "autoPause": {
+      "type": "string",
+      "title": "Auto-pause at 5-hour usage",
+      "description": "When the 5-hour usage reaches this percentage, each session with a running turn does what /htgr-pause does: stops the turn and resumes after the 5-hour reset. Once per session per 5-hour period; off disables it.",
+      "default": "90",
+      "options": [
+        "off",
+        "85",
+        "90",
+        "95"
       ]
     },
     "weeklyResume": {

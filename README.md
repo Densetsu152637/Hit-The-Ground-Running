@@ -4,6 +4,7 @@ A Claude Code mod that keeps long, agent-heavy sessions inside the plan's usage 
 
 - **Usage push.** The plan's 5-hour and weekly readings (pushed by the engine as `session.measure`) are compared with tiers. Each time a tier is crossed the model gets one short hidden note, so it knows how much room is left without being asked.
 - **Spawn gate.** Near a limit the mod refuses new subagents. Running agents finish and `SendMessage` to them still works. It matches the agent-pool usage gate of the workflow this mod was written for.
+- **Auto-pause.** At 90% of the 5-hour limit, every session with a running turn stops and schedules its resume for the 5-hour reset, as `/htgr-pause` would.
 - **Auto-resume.** When a rate-limit stop is a real plan cap, the mod waits for the reset and then sends a clearly labeled resume prompt.
 - **Compaction before resume.** If more than 25% of the context window is in use when the limits have reset, the session is compacted first, with instructions that keep the plan, decisions, subagent assignments, commits and the exact next step.
 
@@ -25,7 +26,7 @@ The status line shows a compact reading after the mod's name: `ðŸŸ¢ Gate open  Â
 A resume is scheduled from three sources:
 
 1. **A rate-limit cap.** On a `StopFailure` with `error: "rate_limit"` the mod reads this session's usage. Only if some window reads at or above its gate tier (5-hour 85%, weekly 95%) with a reset still ahead is it treated as a plan cap; a transient 429 is ignored and nothing is scheduled.
-2. **`/htgr-pause`** (see below).
+2. **`/htgr-pause`**, typed (see below) or automatic (next section).
 3. **A stored schedule.** The schedule is kept in the mod's store (`{ sessionId, resetsAt, reason, attempts }` plus the fire time), so an app restart or a mod reload re-arms it when the session starts again. A schedule more than a day overdue is dropped.
 
 The resume fires at the reset plus 30 to 90 seconds of jitter. About a minute before, a toast says so; `/htgr-cancel` stops it. At fire time the mod:
@@ -36,6 +37,12 @@ The resume fires at the reset plus 30 to 90 seconds of jitter. About a minute be
 4. submits: *"Usage limits reset (Hit The Ground Running). Continue where you stopped; re-check the agent-pool usage gate before spawning. If a limit is hit again, stop."* The model reads it as a message from this mod.
 
 Safety: if you type anything in the session after the halt, the schedule is cancelled; you are back. Prompts from background tasks, the mod's own commands and `isMeta` rows do not count. The mod never approves anything: permission prompts still wait for you.
+
+### Auto-pause at 90% of the 5-hour limit
+
+When a 5-hour reading reaches the `autoPause` tier (90% by default) while a session's main turn is running, the mod does in that session what `/htgr-pause` does: it stops the turn and schedules a resume at the 5-hour reset (plus jitter), with a toast. Every session with the mod runs this on its own readings, so every chat that is working when usage crosses the tier pauses; an idle chat has nothing to stop and pauses on its first response if it starts working later in the same period.
+
+It fires once per session per 5-hour period (remembered across reloads): typing a prompt after an auto-pause cancels the resume as usual, and the session then keeps working until the next reset. `autoPause` takes `85`, `90` (default), `95` or `off`.
 
 ### The reading is this session's last API response
 
@@ -61,9 +68,9 @@ Claude Code already has an auto-continue for 5-hour caps: the desktop app's **Au
 
 Recommended: if you want compaction before 5-hour resumes, use `fiveHourResume: mod` and switch the native one off. Otherwise leave the default and the native resume, and use the mod for the gate and the notes.
 
-`weeklyResume` (`on` by default, or `off`) controls weekly caps, which only this mod resumes. `/htgr-pause` is always the mod's.
+`weeklyResume` (`on` by default, or `off`) controls weekly caps, which only this mod resumes. `/htgr-pause`, typed or automatic (`autoPause`, above), is always the mod's.
 
-Set both in the plugin's config menu or under `pluginConfigs` in settings.
+Set these in the plugin's config menu or under `pluginConfigs` in settings.
 
 ## Keep the computer awake
 
