@@ -2,7 +2,7 @@ import type { EngineInterface, Register, SessionRateLimit, Timer } from 'claude-
 
 import {
   COMPACT_ABOVE, GATE, LABEL, MAX_REARMS, SHORT, WARN,
-  contextPercent, effective, fmtClock, fmtDuration, gating, jitter, levelOf, meter, parseWhen, pct,
+  atGate, contextPercent, effective, exhausted, fmtClock, fmtDuration, gating, jitter, levelOf, meter, parseWhen, pct,
 } from './logic'
 import type { Effective, Kind } from './logic'
 
@@ -68,6 +68,8 @@ const isResume = (v: unknown): v is Resume => {
 const freshState = () => ({
   sid: '',
   gated: false,
+  /** A window is used up, so the session runs on usage credits and the gate stays open. */
+  credits: false,
   tiers: {} as Partial<Record<Kind, Tier>>,
   eff: [] as Effective[],
   resume: null as Resume | null,
@@ -99,15 +101,15 @@ const note = async ($: EngineInterface, text: string) => {
   } catch { /* the engine refused the row: the gate still holds through the tool hooks */ }
 }
 
-const gateText = (eff: readonly Effective[], now: number): string =>
-  gating(eff).map(x => `${LABEL[x.kind]} usage ${pct(x.percent)}${x.resetsAt ? ` (resets ${fmtClock(x.resetsAt, now)})` : ''}`).join(' and ')
+const gateText = (windows: readonly Effective[], now: number): string =>
+  windows.map(x => `${LABEL[x.kind]} usage ${pct(x.percent)}${x.resetsAt ? ` (resets ${fmtClock(x.resetsAt, now)})` : ''}`).join(' and ')
 
 // ---- status line -------------------------------------------------------------------------------------------------
 
 const setStatus = ($: EngineInterface, now: number) => {
   try {
     // Plain text is all a status line takes: block meters and colored dots stand in for a drawing.
-    const parts = [s.gated ? '🔴 Gate closed' : '🟢 Gate open']
+    const parts = [s.credits ? '💳 Gate open (credits)' : s.gated ? '🔴 Gate closed' : '🟢 Gate open']
     if (s.eff.length === 0) parts.push('waiting for a usage reading')
     else parts.push(...s.eff.map(x => `${SHORT[x.kind]} ${meter(x.percent)} ${Math.round(x.percent)}%${levelOf(x.kind, x.percent) === 1 ? ' ⚠' : ''}`))
     const r = s.resume
@@ -122,14 +124,19 @@ const refreshStatus = async ($: EngineInterface) => setStatus($, await $.clock.n
 // ---- usage tiers and the gate -----------------------------------------------------------------------------------
 
 const persistTiers = async ($: EngineInterface) => {
-  await $.store.set(tiersKey(), { tiers: s.tiers, gated: s.gated, pausedFor: s.pausedFor })
+  await $.store.set(tiersKey(), { tiers: s.tiers, gated: s.gated, credits: s.credits, pausedFor: s.pausedFor })
 }
 
-/** Compares a reading with the tiers: one note per tier crossing per reset period, one when the gate reopens. */
+/**
+ * Compares a reading with the tiers: one note per tier crossing per reset period, one when the gate reopens, and one
+ * when a used-up window moves the session onto usage credits, where the gate stays open.
+ */
 const evaluate = async ($: EngineInterface, readings: readonly SessionRateLimit[]) => {
   const now = await $.clock.now()
   const eff = effective(readings, now)
   s.eff = eff
+  const usedUp = exhausted(eff)
+  const isCredits = usedUp.length > 0
   const notes: string[] = []
   let gateNoted = false
   for (const x of eff) {
@@ -144,6 +151,8 @@ const evaluate = async ($: EngineInterface, readings: readonly SessionRateLimit[
     t.level = level
     const when = x.resetsAt ? ` (resets ${fmtClock(x.resetsAt, now)})` : ''
     if (level === 2) {
+      // On credits the gate does not close; the credits note below says so instead.
+      if (isCredits) continue
       gateNoted = true
       notes.push(`${TAG} ${LABEL[x.kind]} usage ${pct(x.percent)}${when}. Agent-pool gate closed: spawn no new subagents; let running ones finish.`)
     } else {
@@ -153,11 +162,19 @@ const evaluate = async ($: EngineInterface, readings: readonly SessionRateLimit[
   const closing = gating(eff)
   const isGated = closing.length > 0
   let toastText = ''
-  if (isGated && !s.gated) {
+  const wasCredits = s.credits
+  s.credits = isCredits
+  if (isCredits) {
+    s.gated = false
+    if (!wasCredits) {
+      toastText = `Running on usage credits (${gateText(usedUp, now)}): agent-pool gate open.`
+      notes.push(`${TAG} ${gateText(usedUp, now)}: plan usage is used up, so work now draws on usage credits. Agent-pool gate open: subagents may be spawned within the workflow's usage-credits agent cap.`)
+    }
+  } else if (isGated && !s.gated) {
     s.gated = true
-    toastText = `Agent-pool gate closed: ${gateText(eff, now)}. No new subagents until it resets.`
-    if (!gateNoted) notes.push(`${TAG} ${gateText(eff, now)}. Agent-pool gate closed: spawn no new subagents; let running ones finish.`)
-  } else if (!isGated && s.gated) {
+    toastText = `Agent-pool gate closed: ${gateText(closing, now)}. No new subagents until it resets.`
+    if (!gateNoted) notes.push(`${TAG} ${gateText(closing, now)}. Agent-pool gate closed: spawn no new subagents; let running ones finish.`)
+  } else if (!isGated && (s.gated || wasCredits)) {
     s.gated = false
     const readingsText = eff.map(x => `${LABEL[x.kind]} ${pct(x.percent)}`).join(', ')
     toastText = 'Agent-pool gate reopened: usage limits reset.'
@@ -168,8 +185,10 @@ const evaluate = async ($: EngineInterface, readings: readonly SessionRateLimit[
 
   s.reopenTimer?.cancel()
   s.reopenTimer = null
-  if (isGated) {
-    const until = Math.max(...closing.map(x => x.resetsAt ?? now + NO_READING_RETRY_MS))
+  // Re-read once the windows holding the gate closed (or the session on credits) have reset.
+  const holding = isCredits ? usedUp : closing
+  if (holding.length > 0) {
+    const until = Math.max(...holding.map(x => x.resetsAt ?? now + NO_READING_RETRY_MS))
     s.reopenTimer = $.clock.after(Math.max(until - now, 0) + REOPEN_SLACK_MS, () => { void recheck($) })
   }
   await persistTiers($)
@@ -185,7 +204,7 @@ const recheck = async ($: EngineInterface) => {
 const gateNow = async ($: EngineInterface): Promise<string | null> => {
   const now = await $.clock.now()
   const eff = effective((await $.session.usage()).rateLimits, now)
-  const text = gateText(eff, now)
+  const text = gateText(gating(eff), now)
   return text ? `${TAG} Agent-pool usage gate is closed (${text}): spawn no new subagents; let running ones finish, or wait for the reset. Messaging a running agent (SendMessage) is still allowed.` : null
 }
 
@@ -266,8 +285,9 @@ const fire = async ($: EngineInterface) => {
       await arm($)
       return
     }
+    // A resume waits on the plan windows themselves: a window still at its gate tier is still capped.
     const usage = await $.session.usage()
-    const blocking = gating(effective(usage.rateLimits, now))
+    const blocking = atGate(effective(usage.rateLimits, now))
     if (blocking.length > 0) {
       if (r.attempts >= MAX_REARMS) return await giveUp($, `usage is still at the gate after ${r.attempts} re-arms`)
       r.attempts++
@@ -275,7 +295,7 @@ const fire = async ($: EngineInterface) => {
       r.fireAt = r.resetsAt + jitter()
       await $.store.set(resumeKey(), r)
       await arm($)
-      toast($, `Usage is still high (${gateText(effective(usage.rateLimits, now), now)}); resume re-armed for ${fmtClock(r.fireAt, now)} (attempt ${r.attempts} of ${MAX_REARMS}).`, 12_000)
+      toast($, `Usage is still high (${gateText(blocking, now)}); resume re-armed for ${fmtClock(r.fireAt, now)} (attempt ${r.attempts} of ${MAX_REARMS}).`, 12_000)
       return
     }
     const compaction = await compactIfNeeded($)
@@ -372,10 +392,11 @@ export const register: Register = (on, options) => {
         description: 'Cancel the pending automatic resume (Hit The Ground Running)',
         immediate: true,
       })
-      const savedTiers = (await $.store.get(tiersKey())) as { tiers?: Partial<Record<Kind, Tier>>; gated?: boolean; pausedFor?: number } | undefined
+      const savedTiers = (await $.store.get(tiersKey())) as { tiers?: Partial<Record<Kind, Tier>>; gated?: boolean; credits?: boolean; pausedFor?: number } | undefined
       if (savedTiers && typeof savedTiers === 'object') {
         s.tiers = savedTiers.tiers ?? {}
         s.gated = savedTiers.gated === true
+        s.credits = savedTiers.credits === true
         s.pausedFor = typeof savedTiers.pausedFor === 'number' ? savedTiers.pausedFor : 0
       }
       await rehydrate($)
@@ -493,7 +514,7 @@ export const register: Register = (on, options) => {
       const reset = x.resetsAt ? `resets ${fmtClock(x.resetsAt, now)}${x.isExpired ? ' (passed)' : ''}` : 'reset unknown'
       lines.push(`${LABEL[x.kind].padEnd(9)} ${pct(x.percent).padStart(6)}  ${reset}  (warn ${WARN[x.kind]}%, gate ${GATE[x.kind]}%)`)
     }
-    lines.push(`gate      ${s.gated ? 'CLOSED: no new subagents' : 'open'}`)
+    lines.push(`gate      ${s.credits ? 'open: a window is used up, running on usage credits' : s.gated ? 'CLOSED: no new subagents' : 'open'}`)
     const r = s.resume
     if (!r) lines.push('resume    none pending')
     else if (r.owner === 'mod') lines.push(`resume    ${fmtClock(r.fireAt, now)} (in ${fmtDuration(r.fireAt - now)}), ${r.reason}, re-arms ${r.attempts}/${MAX_REARMS}; /htgr-cancel stops it`)

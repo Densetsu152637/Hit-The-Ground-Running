@@ -49,6 +49,30 @@ test('gate: it reopens once the window resets, so spawns pass again', async ($, 
   expect(seen.agentCalls).toBe(1)
 })
 
+test('gate: on usage credits (a window used up before its reset) the gate does not clamp', async ($, on) => {
+  const seen = spawns(on)
+  const r = await rig($, on)
+  await measure($, r, [five(40, reset5), week(100, NOW + 48 * HOUR)])
+  const call = await $.tool.call(AGENT_CALL as never)
+  expect(call).not.toHaveProperty('deny')
+  await $.agent.spawn(SPAWN as never)
+  // A 5-hour window past its cap counts the same, even with the weekly one at its gate tier.
+  await measure($, r, [five(100, reset5), week(96, NOW + 48 * HOUR)])
+  await $.tool.call(AGENT_CALL as never)
+  expect(seen.agentCalls).toBe(2)
+  expect(seen.spawned).toBe(1)
+})
+
+test('gate: on usage credits a failing hook still fails open', async ($, on) => {
+  const seen = spawns(on)
+  const r = await rig($, on)
+  await measure($, r, [week(96, NOW + 48 * HOUR)])
+  await measure($, r, [week(100, NOW + 48 * HOUR)])
+  r.failUsage = true
+  await $.tool.call(AGENT_CALL as never)
+  expect(seen.agentCalls).toBe(1)
+})
+
 test('gate: a hook that fails is denied only while the gate is closed (the .catch fails closed only then)', async ($, on) => {
   const seen = spawns(on)
   const r = await rig($, on)

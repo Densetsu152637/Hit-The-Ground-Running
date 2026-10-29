@@ -11,6 +11,8 @@ export const SHORT: Readonly<Record<Kind, string>> = { five_hour: '5h', seven_da
 export const WARN: Readonly<Record<Kind, number>> = { five_hour: 70, seven_day: 90 }
 /** Gate tiers: the agent-pool usage gate of the workflow closes (no new subagents). */
 export const GATE: Readonly<Record<Kind, number>> = { five_hour: 85, seven_day: 95 }
+/** A window this full has no plan usage left: whatever still runs is drawn from usage credits. */
+export const EXHAUSTED = 100
 /** Compaction runs only when the context window is more than this full. */
 export const COMPACT_ABOVE = 25
 /** Resume fires this long after the reset, spread so that many sessions do not wake together. */
@@ -51,8 +53,17 @@ export const effective = (readings: readonly SessionRateLimit[], now: number): E
 /** 0 below the warn tier, 1 warn, 2 gate. */
 export const levelOf = (kind: Kind, percent: number): 0 | 1 | 2 => (percent >= GATE[kind] ? 2 : percent >= WARN[kind] ? 1 : 0)
 
-/** Windows that keep the gate closed now. */
-export const gating = (eff: readonly Effective[]): Effective[] => eff.filter(x => levelOf(x.kind, x.percent) === 2)
+/** Windows at their gate tier. */
+export const atGate = (eff: readonly Effective[]): Effective[] => eff.filter(x => levelOf(x.kind, x.percent) === 2)
+
+/**
+ * Windows used up before their reset. The engine reports no credit balance, but a session that still gets responses
+ * past an exhausted window is running on usage credits, and one without credits is refused anyway.
+ */
+export const exhausted = (eff: readonly Effective[]): Effective[] => eff.filter(x => x.percent >= EXHAUSTED)
+
+/** Windows that keep the gate closed now: none on usage credits, where there is no plan usage left to keep. */
+export const gating = (eff: readonly Effective[]): Effective[] => (exhausted(eff).length > 0 ? [] : atGate(eff))
 
 /** A five-cell text meter of a percentage, `▰▰▱▱▱`; any use shows at least one cell. */
 export const meter = (percent: number, cells = 5): string => {

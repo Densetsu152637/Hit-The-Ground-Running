@@ -3,7 +3,7 @@
 A Claude Code mod that keeps long, agent-heavy sessions inside the plan's usage limits and gets them going again after a cap resets.
 
 - **Usage push.** The plan's 5-hour and weekly readings (pushed by the engine as `session.measure`) are compared with tiers. Each time a tier is crossed the model gets one short hidden note, so it knows how much room is left without being asked.
-- **Spawn gate.** Near a limit the mod refuses new subagents. Running agents finish and `SendMessage` to them still works. It matches the agent-pool usage gate of the workflow this mod was written for.
+- **Spawn gate.** Near a limit the mod refuses new subagents. Running agents finish and `SendMessage` to them still works. It matches the agent-pool usage gate of the workflow this mod was written for. Once a window is used up and the session runs on usage credits, the gate stays open.
 - **Auto-pause.** At 90% of the 5-hour limit, every session with a running turn stops and schedules its resume for the 5-hour reset, as `/htgr-pause` would.
 - **Auto-resume.** When a rate-limit stop is a real plan cap, the mod waits for the reset and then sends a clearly labeled resume prompt.
 - **Compaction before resume.** If more than 25% of the context window is in use when the limits have reset, the session is compacted first, with instructions that keep the plan, decisions, subagent assignments, commits and the exact next step.
@@ -17,9 +17,15 @@ A Claude Code mod that keeps long, agent-heavy sessions inside the plan's usage 
 
 Notes are edge-triggered, once per window per reset period. A jump from below the warn tier straight to the gate gives the gate note alone. When the gate closes you also get a toast; when the window resets one "gate reopened" note and toast follow.
 
+### Usage credits
+
+The gate protects plan usage; once a window reads 100% before its reset there is none left to protect. A session that still gets responses then is running on usage credits (extra usage), and one without credits is refused by the API anyway, so the gate does not clamp: while any window is used up it stays open, whatever the other window reads. Crossing into credits gives one note and toast (`💳 Gate open (credits)` in the status line); when the used-up window resets the session is back on plan usage and the tiers apply again. The engine reports no credit balance to mods, so this is read from the windows alone, and any agent cap for credits is the workflow's to keep.
+
+A pending resume still waits for the plan windows to drop below their gate tiers, as before.
+
 While the gate is closed the mod answers `{ deny }` to the `Agent` tool and to `agent.spawn` (workflow agents and teammates included). A resumed agent is not a new one and passes. The hooks fail open, as Claude Code hooks do, except that each carries a `.catch` that refuses only while the gate is closed, so a failed check never blocks spawning when usage is low.
 
-The status line shows a compact reading after the mod's name: `🟢 Gate open  ·  5h ▰▰▰▱▱ 62%  ·  wk ▰▰▱▱▱ 41%  ·  ⏰ Resume 06:03 (in 2h14m)`. A window at its warn tier gets ⚠; a closed gate shows 🔴 Gate closed.
+The status line shows a compact reading after the mod's name: `🟢 Gate open  ·  5h ▰▰▰▱▱ 62%  ·  wk ▰▰▱▱▱ 41%  ·  ⏰ Resume 06:03 (in 2h14m)`. A window at its warn tier gets ⚠; a closed gate shows 🔴 Gate closed; usage credits show 💳 Gate open (credits).
 
 ## Auto-resume
 

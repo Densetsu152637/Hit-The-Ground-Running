@@ -89,6 +89,34 @@ test('tiers: tier state survives a reload of the session start, so a note is not
   expect(notes(r)).toHaveLength(1)
 })
 
+test('credits: a used-up window reopens the gate with one note, a toast and a status, until it resets', async ($, on) => {
+  const r = await rig($, on)
+  await measure($, r, [five(10, reset5), week(96, resetWk)])
+  expect(notes(r).at(-1)).toContain('gate closed')
+  await measure($, r, [five(10, reset5), week(100, resetWk)])
+  await measure($, r, [five(30, reset5), week(100, resetWk)])
+  const credit = notes(r).filter(t => t.includes('usage credits'))
+  expect(credit).toHaveLength(1)
+  expect(credit[0]).toContain('weekly usage 100%')
+  expect(credit[0]).toContain('Agent-pool gate open')
+  expect(r.toasts.filter(t => t.includes('usage credits'))).toHaveLength(1)
+  expect(r.statuses.at(-1)).toContain('💳 Gate open (credits)')
+  // The weekly reset passes: back on plan usage, the gate is open as usual.
+  r.usage.rateLimits = [five(30, reset5), week(1, resetWk + 168 * HOUR)]
+  await r.clock.advance(48 * HOUR + MIN)
+  expect(notes(r).at(-1)).toContain('Agent-pool gate reopened')
+  expect(r.statuses.at(-1)).toContain('🟢 Gate open')
+})
+
+test('credits: a jump straight to a used-up window gives the credits note, not a gate-closed one', async ($, on) => {
+  const r = await rig($, on)
+  await measure($, r, [five(40, reset5)])
+  await measure($, r, [five(100, reset5)])
+  expect(notes(r)).toHaveLength(1)
+  expect(notes(r)[0]).toContain('usage credits')
+  expect(r.toasts.some(t => t.includes('gate closed'))).toBe(false)
+})
+
 test('status: meters and markers read at a glance', async ($, on) => {
   const r = await rig($, on)
   await measure($, r, [five(72, NOW + 2 * HOUR), week(30, NOW + 48 * HOUR)])

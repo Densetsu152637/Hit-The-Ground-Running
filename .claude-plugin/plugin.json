@@ -1,7 +1,7 @@
 {
   "name": "hit-the-ground-running",
-  "version": "0.2.0",
-  "description": "Hit The Ground Running: pushes the plan's 5-hour and weekly usage to the model, closes the agent-pool gate (no new subagents) near a limit, pauses running sessions at 90% of the 5-hour limit, and resumes the session after a cap resets, compacting first when the context is large.",
+  "version": "0.3.0",
+  "description": "Hit The Ground Running: pushes the plan's 5-hour and weekly usage to the model, closes the agent-pool gate (no new subagents) near a limit but not on usage credits, pauses running sessions at 90% of the 5-hour limit, and resumes the session after a cap resets, compacting first when the context is large.",
   "author": {
     "name": "Densetsu152637",
     "url": "https://github.com/Densetsu152637"
