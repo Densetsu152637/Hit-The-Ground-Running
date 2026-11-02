@@ -88,3 +88,39 @@ test('switch: /htgr shows the switch', async ($, on) => {
   await runCommand($, 'htgr-gate', 'suspend')
   expect(await runCommand($, 'htgr')).toContain('SUSPENDED until')
 })
+
+test('switch: when usage runs out the gate suspends itself until the 5-hour reset, for every session', async ($, on) => {
+  const seen = spawns(on)
+  const r = await rig($, on)
+  await measure($, r, [five(90, reset5)])
+  await measure($, r, [five(100, reset5)])
+  expect(r.store['gate-off']).toEqual({ until: reset5, at: NOW, auto: true })
+  expect(notes(r).at(-1)).toContain('Agent-pool gate suspended until')
+  expect(r.statuses.at(-1)).toContain('⏸ Gate suspended until')
+  expect(await runCommand($, 'htgr')).toContain('SUSPENDED automatically')
+  await $.tool.call(AGENT_CALL as never)
+  expect(seen.agentCalls).toBe(1)
+  // The reset passes: the suspension lapses and the gate is on again, open on a fresh window.
+  r.usage.rateLimits = [five(1, reset5 + 5 * HOUR)]
+  await r.clock.advance(3 * HOUR + 60_000)
+  expect(r.store['gate-off']).toBeUndefined()
+  expect(r.statuses.at(-1)).toContain('🟢 Gate open')
+})
+
+test('switch: a manual off is not replaced when usage runs out', async ($, on) => {
+  const r = await rig($, on)
+  await runCommand($, 'htgr-gate', 'off')
+  await measure($, r, [five(100, reset5)])
+  expect(r.store['gate-off']).toEqual({ until: null, at: NOW })
+  expect(r.statuses.at(-1)).toContain('⚪ Gate off (credits)')
+})
+
+test('switch: /htgr-gate on after an automatic suspension holds for the rest of that period', async ($, on) => {
+  const r = await rig($, on)
+  await measure($, r, [five(100, reset5)])
+  expect(await runCommand($, 'htgr-gate', 'on')).toContain('switched on')
+  expect(r.store['gate-off']).toBeUndefined()
+  await measure($, r, [five(100, reset5)])
+  expect(r.store['gate-off']).toBeUndefined()
+  expect(r.statuses.at(-1)).toContain('💳 Gate open (credits)')
+})

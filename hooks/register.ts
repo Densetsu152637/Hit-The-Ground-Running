@@ -50,10 +50,15 @@ type Resume = {
 
 type Tier = { resets: number; level: number }
 
-/** The person's switch on the gate, shared by every session: off until `until` (epoch ms), or until switched on (null). */
-type GateOff = { until: number | null; at: number }
+/**
+ * The switch on the gate, shared by every session: off until `until` (epoch ms), or until switched on (null). `auto`
+ * marks a suspension the mod set itself because usage ran out.
+ */
+type GateOff = { until: number | null; at: number; auto?: boolean }
 
 const GATE_OFF_KEY = 'gate-off'
+/** The 5-hour reset of a period in which the person switched an automatic suspension back on: none again then. */
+const AUTO_SKIP_KEY = 'gate-auto-skip'
 
 const isGateOff = (v: unknown): v is GateOff => {
   const g = v as GateOff | null
@@ -136,9 +141,10 @@ const gateOff = async ($: EngineInterface, now: number): Promise<GateOff | null>
 const setStatus = ($: EngineInterface, now: number) => {
   try {
     // Plain text is all a status line takes: block meters and colored dots stand in for a drawing.
+    const credits = s.credits ? ' (credits)' : ''
     const parts = [
-      s.credits ? '💳 Gate open (credits)'
-        : s.off ? (s.off.until === null ? '⚪ Gate off' : `⏸ Gate suspended until ${fmtClock(s.off.until, now)}`)
+      s.off ? (s.off.until === null ? `⚪ Gate off${credits}` : `⏸ Gate suspended until ${fmtClock(s.off.until, now)}${credits}`)
+        : s.credits ? '💳 Gate open (credits)'
         : s.gated ? '🔴 Gate closed' : '🟢 Gate open',
     ]
     if (s.eff.length === 0) parts.push('waiting for a usage reading')
@@ -166,11 +172,22 @@ const evaluate = async ($: EngineInterface, readings: readonly SessionRateLimit[
   const now = await $.clock.now()
   const eff = effective(readings, now)
   s.eff = eff
-  const off = await gateOff($, now)
-  const isLapsed = s.off !== null && s.off.until !== null && off === null
-  s.off = off
+  let off = await gateOff($, now)
   const usedUp = exhausted(eff)
   const isCredits = usedUp.length > 0
+  // Usage ran out: suspend the gate until the 5-hour reset, unless the person switched it back on in this period.
+  let isAutoSuspended = false
+  const five = eff.find(x => x.kind === 'five_hour' && x.resetsAt !== undefined && x.resetsAt > now)
+  if (isCredits && off === null && five?.resetsAt !== undefined) {
+    const skip = await $.store.get(AUTO_SKIP_KEY)
+    if (typeof skip !== 'number' || Math.abs(skip - five.resetsAt) > PERIOD_SLACK_MS) {
+      off = { until: five.resetsAt, at: now, auto: true }
+      await $.store.set(GATE_OFF_KEY, off)
+      isAutoSuspended = true
+    }
+  }
+  const isLapsed = s.off !== null && s.off.until !== null && off === null
+  s.off = off
   const notes: string[] = []
   let gateNoted = false
   for (const x of eff) {
@@ -203,9 +220,13 @@ const evaluate = async ($: EngineInterface, readings: readonly SessionRateLimit[
   s.credits = isCredits
   if (isCredits) {
     s.gated = false
+    const state = isAutoSuspended && off ? `suspended ${offText(off, now)}, the 5-hour reset` : 'open'
     if (!wasCredits) {
-      toastText = `Running on usage credits (${gateText(usedUp, now)}): agent-pool gate open.`
-      notes.push(`${TAG} ${gateText(usedUp, now)}: plan usage is used up, so work now draws on usage credits. Agent-pool gate open: subagents may be spawned within the workflow's usage-credits agent cap.`)
+      toastText = `Running on usage credits (${gateText(usedUp, now)}): agent-pool gate ${state}.`
+      notes.push(`${TAG} ${gateText(usedUp, now)}: plan usage is used up, so work now draws on usage credits. Agent-pool gate ${state}: subagents may be spawned within the workflow's usage-credits agent cap.`)
+    } else if (isAutoSuspended) {
+      toastText = `Usage still used up: agent-pool gate ${state}.`
+      notes.push(`${TAG} ${gateText(usedUp, now)}: still on usage credits. Agent-pool gate ${state}.`)
     }
   } else if (isGated && !s.gated) {
     s.gated = true
@@ -568,8 +589,9 @@ export const register: Register = (on, options) => {
       lines.push(`${LABEL[x.kind].padEnd(9)} ${pct(x.percent).padStart(6)}  ${reset}  (warn ${WARN[x.kind]}%, gate ${GATE[x.kind]}%)`)
     }
     const off = await gateOff($, now)
-    lines.push(`gate      ${s.credits ? 'open: a window is used up, running on usage credits'
-      : off ? `${off.until === null ? 'OFF' : 'SUSPENDED'} ${offText(off, now)}: spawns are not gated; /htgr-gate on switches it back`
+    const onCredits = s.credits ? ' (a window is used up, running on usage credits)' : ''
+    lines.push(`gate      ${off ? `${off.until === null ? 'OFF' : off.auto ? 'SUSPENDED automatically' : 'SUSPENDED'} ${offText(off, now)}${onCredits}: spawns are not gated; /htgr-gate on switches it back`
+      : s.credits ? 'open: a window is used up, running on usage credits'
       : s.gated ? 'CLOSED: no new subagents' : 'open'}`)
     const r = s.resume
     if (!r) lines.push('resume    none pending')
@@ -586,6 +608,8 @@ export const register: Register = (on, options) => {
     const want = arg === '' ? (current ? 'on' : 'off') : arg
     if (want === 'on') {
       if (!current) return { text: 'The agent-pool gate is already on.' }
+      // Switching an automatic suspension back on holds for the rest of its period, so it is not set again at once.
+      if (current.auto && current.until !== null) await $.store.set(AUTO_SKIP_KEY, current.until)
       await $.store.delete(GATE_OFF_KEY)
       s.off = null
       // Re-read at once: a window already at its gate tier closes the gate now, with its note.

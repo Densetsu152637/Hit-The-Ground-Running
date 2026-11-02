@@ -98,9 +98,10 @@ test('credits: a used-up window reopens the gate with one note, a toast and a st
   const credit = notes(r).filter(t => t.includes('usage credits'))
   expect(credit).toHaveLength(1)
   expect(credit[0]).toContain('weekly usage 100%')
-  expect(credit[0]).toContain('Agent-pool gate open')
+  expect(credit[0]).toContain('Agent-pool gate suspended until')
   expect(r.toasts.filter(t => t.includes('usage credits'))).toHaveLength(1)
-  expect(r.statuses.at(-1)).toContain('💳 Gate open (credits)')
+  expect(r.statuses.at(-1)).toContain('⏸ Gate suspended until')
+  expect(r.statuses.at(-1)).toContain('(credits)')
   // The weekly reset passes: back on plan usage, the gate is open as usual.
   r.usage.rateLimits = [five(30, reset5), week(1, resetWk + 168 * HOUR)]
   await r.clock.advance(48 * HOUR + MIN)
