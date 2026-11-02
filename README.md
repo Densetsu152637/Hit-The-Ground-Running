@@ -3,7 +3,7 @@
 A Claude Code mod that keeps long, agent-heavy sessions inside the plan's usage limits and gets them going again after a cap resets.
 
 - **Usage push.** The plan's 5-hour and weekly readings (pushed by the engine as `session.measure`) are compared with tiers. Each time a tier is crossed the model gets one short hidden note, so it knows how much room is left without being asked.
-- **Spawn gate.** Near a limit the mod refuses new subagents. Running agents finish and `SendMessage` to them still works. It matches the agent-pool usage gate of the workflow this mod was written for. Once a window is used up and the session runs on usage credits, the gate stays open.
+- **Spawn gate.** Near a limit the mod refuses new subagents. Running agents finish and `SendMessage` to them still works. It matches the agent-pool usage gate of the workflow this mod was written for. Once a window is used up and the session runs on usage credits, the gate stays open. `/htgr-gate` switches it off, or off until the 5-hour reset.
 - **Auto-pause.** At 90% of the 5-hour limit, every session with a running turn stops and schedules its resume for the 5-hour reset, as `/htgr-pause` would.
 - **Auto-resume.** When a rate-limit stop is a real plan cap, the mod waits for the reset and then sends a clearly labeled resume prompt.
 - **Compaction before resume.** If more than 25% of the context window is in use when the limits have reset, the session is compacted first, with instructions that keep the plan, decisions, subagent assignments, commits and the exact next step.
@@ -23,9 +23,13 @@ The gate protects plan usage; once a window reads 100% before its reset there is
 
 A pending resume still waits for the plan windows to drop below their gate tiers, as before.
 
+### Switching the gate off
+
+`/htgr-gate off` switches the gate off until `/htgr-gate on`; `/htgr-gate reset` switches it off until the next 5-hour reset, after which it holds again (so a weekly window still at its gate tier closes it at once). With no argument the command toggles. The switch is kept in the mod's store and applies to every session. While it is off, spawns are not refused, the tier notes still come but tell the model the gate is off, and the status line shows `⚪ Gate off` (with `until HH:MM` for a reset switch). Switching it off while the gate is closed gives the model one note that subagents may be spawned again; switching it on while a window is at its gate tier closes the gate at once, with the usual note. The switch does not touch auto-pause or the resumes.
+
 While the gate is closed the mod answers `{ deny }` to the `Agent` tool and to `agent.spawn` (workflow agents and teammates included). A resumed agent is not a new one and passes. The hooks fail open, as Claude Code hooks do, except that each carries a `.catch` that refuses only while the gate is closed, so a failed check never blocks spawning when usage is low.
 
-The status line shows a compact reading after the mod's name: `🟢 Gate open  ·  5h ▰▰▰▱▱ 62%  ·  wk ▰▰▱▱▱ 41%  ·  ⏰ Resume 06:03 (in 2h14m)`. A window at its warn tier gets ⚠; a closed gate shows 🔴 Gate closed; usage credits show 💳 Gate open (credits).
+The status line shows a compact reading after the mod's name: `🟢 Gate open  ·  5h ▰▰▰▱▱ 62%  ·  wk ▰▰▱▱▱ 41%  ·  ⏰ Resume 06:03 (in 2h14m)`. A window at its warn tier gets ⚠; a closed gate shows 🔴 Gate closed; usage credits show 💳 Gate open (credits); a switched-off gate shows ⚪ Gate off.
 
 ## Auto-resume
 
@@ -93,6 +97,7 @@ If the machine slept through a reset, the resume fires shortly after the session
 | - | - |
 | `/htgr` | Readings, gate state, the pending resume and its re-arm count, the options. |
 | `/htgr-pause [HH:MM \| reset]` | Stops the running turn if there is one and schedules a resume at the local time `HH:MM` (the next time that clock reads) or, with `reset` or no argument, at the next 5-hour reset. Use it to park work deliberately. |
+| `/htgr-gate [on \| off \| reset]` | Switches the agent-pool gate on, off, or off until the next 5-hour reset; no argument toggles it. |
 | `/htgr-cancel` | Cancels the pending resume. |
 
 ## Not feasible

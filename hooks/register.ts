@@ -50,6 +50,16 @@ type Resume = {
 
 type Tier = { resets: number; level: number }
 
+/** The person's switch on the gate, shared by every session: off until `until` (epoch ms), or until switched on (null). */
+type GateOff = { until: number | null; at: number }
+
+const GATE_OFF_KEY = 'gate-off'
+
+const isGateOff = (v: unknown): v is GateOff => {
+  const g = v as GateOff | null
+  return typeof g === 'object' && g !== null && typeof g.at === 'number' && (g.until === null || typeof g.until === 'number')
+}
+
 // Machine origins of a prompt: everything else (composer, bridge, sdk, unclassified, channel) may be the person.
 const MACHINE_ORIGINS = new Set([
   'task-notification', 'scheduled-trigger', 'peer', 'peer-send-message', 'projects-relay', 'coordinator', 'observer',
@@ -70,6 +80,9 @@ const freshState = () => ({
   gated: false,
   /** A window is used up, so the session runs on usage credits and the gate stays open. */
   credits: false,
+  /** The gate is switched off by the person (`/htgr-gate`); the readings and notes go on. */
+  off: null as GateOff | null,
+  offTimer: null as Timer | null,
   tiers: {} as Partial<Record<Kind, Tier>>,
   eff: [] as Effective[],
   resume: null as Resume | null,
@@ -104,12 +117,30 @@ const note = async ($: EngineInterface, text: string) => {
 const gateText = (windows: readonly Effective[], now: number): string =>
   windows.map(x => `${LABEL[x.kind]} usage ${pct(x.percent)}${x.resetsAt ? ` (resets ${fmtClock(x.resetsAt, now)})` : ''}`).join(' and ')
 
+const offText = (off: GateOff, now: number): string =>
+  off.until === null ? 'until switched back on' : `until ${fmtClock(off.until, now)}`
+
+/** The switch as stored; an until-reset switch that has lapsed is removed and reads as on. */
+const gateOff = async ($: EngineInterface, now: number): Promise<GateOff | null> => {
+  const saved = await $.store.get(GATE_OFF_KEY)
+  if (!isGateOff(saved)) return null
+  if (saved.until !== null && saved.until <= now) {
+    await $.store.delete(GATE_OFF_KEY)
+    return null
+  }
+  return saved
+}
+
 // ---- status line -------------------------------------------------------------------------------------------------
 
 const setStatus = ($: EngineInterface, now: number) => {
   try {
     // Plain text is all a status line takes: block meters and colored dots stand in for a drawing.
-    const parts = [s.credits ? '💳 Gate open (credits)' : s.gated ? '🔴 Gate closed' : '🟢 Gate open']
+    const parts = [
+      s.credits ? '💳 Gate open (credits)'
+        : s.off ? `⚪ Gate off${s.off.until === null ? '' : ` until ${fmtClock(s.off.until, now)}`}`
+        : s.gated ? '🔴 Gate closed' : '🟢 Gate open',
+    ]
     if (s.eff.length === 0) parts.push('waiting for a usage reading')
     else parts.push(...s.eff.map(x => `${SHORT[x.kind]} ${meter(x.percent)} ${Math.round(x.percent)}%${levelOf(x.kind, x.percent) === 1 ? ' ⚠' : ''}`))
     const r = s.resume
@@ -135,6 +166,9 @@ const evaluate = async ($: EngineInterface, readings: readonly SessionRateLimit[
   const now = await $.clock.now()
   const eff = effective(readings, now)
   s.eff = eff
+  const off = await gateOff($, now)
+  const isLapsed = s.off !== null && s.off.until !== null && off === null
+  s.off = off
   const usedUp = exhausted(eff)
   const isCredits = usedUp.length > 0
   const notes: string[] = []
@@ -154,13 +188,16 @@ const evaluate = async ($: EngineInterface, readings: readonly SessionRateLimit[
       // On credits the gate does not close; the credits note below says so instead.
       if (isCredits) continue
       gateNoted = true
-      notes.push(`${TAG} ${LABEL[x.kind]} usage ${pct(x.percent)}${when}. Agent-pool gate closed: spawn no new subagents; let running ones finish.`)
+      notes.push(off
+        ? `${TAG} ${LABEL[x.kind]} usage ${pct(x.percent)}${when}. The agent-pool gate is switched off by the user ${offText(off, now)}: subagents may still be spawned; keep them to what the task needs.`
+        : `${TAG} ${LABEL[x.kind]} usage ${pct(x.percent)}${when}. Agent-pool gate closed: spawn no new subagents; let running ones finish.`)
     } else {
       notes.push(`${TAG} ${LABEL[x.kind]} usage ${pct(x.percent)}${when}. Approaching the agent-pool gate at ${GATE[x.kind]}%: keep new subagent spawns to what the task needs.`)
     }
   }
   const closing = gating(eff)
-  const isGated = closing.length > 0
+  const isGated = closing.length > 0 && off === null
+  if (isLapsed) toast($, 'Agent-pool gate switched back on: the 5-hour window reset.')
   let toastText = ''
   const wasCredits = s.credits
   s.credits = isCredits
@@ -174,6 +211,10 @@ const evaluate = async ($: EngineInterface, readings: readonly SessionRateLimit[
     s.gated = true
     toastText = `Agent-pool gate closed: ${gateText(closing, now)}. No new subagents until it resets.`
     if (!gateNoted) notes.push(`${TAG} ${gateText(closing, now)}. Agent-pool gate closed: spawn no new subagents; let running ones finish.`)
+  } else if (off && s.gated) {
+    s.gated = false
+    toastText = `Agent-pool gate switched off ${offText(off, now)}.`
+    notes.push(`${TAG} The user switched the agent-pool gate off ${offText(off, now)}${closing.length > 0 ? ` (${gateText(closing, now)})` : ''}: subagents may be spawned again; keep them to what the task needs.`)
   } else if (!isGated && (s.gated || wasCredits)) {
     s.gated = false
     const readingsText = eff.map(x => `${LABEL[x.kind]} ${pct(x.percent)}`).join(', ')
@@ -191,6 +232,10 @@ const evaluate = async ($: EngineInterface, readings: readonly SessionRateLimit[
     const until = Math.max(...holding.map(x => x.resetsAt ?? now + NO_READING_RETRY_MS))
     s.reopenTimer = $.clock.after(Math.max(until - now, 0) + REOPEN_SLACK_MS, () => { void recheck($) })
   }
+  s.offTimer?.cancel()
+  s.offTimer = null
+  // An until-reset switch lapses at the reset: re-read then, so a window still at its gate tier closes the gate again.
+  if (off?.until != null) s.offTimer = $.clock.after(Math.max(off.until - now, 0) + REOPEN_SLACK_MS, () => { void recheck($) })
   await persistTiers($)
   setStatus($, now)
   await autoPause($, eff, now)
@@ -203,6 +248,7 @@ const recheck = async ($: EngineInterface) => {
 /** The gate as the usage stands now, read fresh: the spawn hooks do not trust a cached verdict. */
 const gateNow = async ($: EngineInterface): Promise<string | null> => {
   const now = await $.clock.now()
+  if (await gateOff($, now)) return null
   const eff = effective((await $.session.usage()).rateLimits, now)
   const text = gateText(gating(eff), now)
   return text ? `${TAG} Agent-pool usage gate is closed (${text}): spawn no new subagents; let running ones finish, or wait for the reset. Messaging a running agent (SendMessage) is still allowed.` : null
@@ -388,6 +434,12 @@ export const register: Register = (on, options) => {
         immediate: true,
       })
       await $.command.register({
+        name: 'htgr-gate',
+        description: 'Switch the agent-pool gate on, off, or off until the next 5-hour reset; no argument toggles it (Hit The Ground Running)',
+        argumentHint: '[on | off | reset]',
+        immediate: true,
+      })
+      await $.command.register({
         name: 'htgr-cancel',
         description: 'Cancel the pending automatic resume (Hit The Ground Running)',
         immediate: true,
@@ -417,6 +469,7 @@ export const register: Register = (on, options) => {
       }
       stopTimers()
       s.reopenTimer?.cancel()
+      s.offTimer?.cancel()
     } catch { /* ending anyway */ }
     return next(e)
   })
@@ -514,13 +567,43 @@ export const register: Register = (on, options) => {
       const reset = x.resetsAt ? `resets ${fmtClock(x.resetsAt, now)}${x.isExpired ? ' (passed)' : ''}` : 'reset unknown'
       lines.push(`${LABEL[x.kind].padEnd(9)} ${pct(x.percent).padStart(6)}  ${reset}  (warn ${WARN[x.kind]}%, gate ${GATE[x.kind]}%)`)
     }
-    lines.push(`gate      ${s.credits ? 'open: a window is used up, running on usage credits' : s.gated ? 'CLOSED: no new subagents' : 'open'}`)
+    const off = await gateOff($, now)
+    lines.push(`gate      ${s.credits ? 'open: a window is used up, running on usage credits'
+      : off ? `OFF ${offText(off, now)}: spawns are not gated; /htgr-gate on switches it back`
+      : s.gated ? 'CLOSED: no new subagents' : 'open'}`)
     const r = s.resume
     if (!r) lines.push('resume    none pending')
     else if (r.owner === 'mod') lines.push(`resume    ${fmtClock(r.fireAt, now)} (in ${fmtDuration(r.fireAt - now)}), ${r.reason}, re-arms ${r.attempts}/${MAX_REARMS}; /htgr-cancel stops it`)
     else lines.push(`resume    left to the native auto-continue (~${fmtClock(r.resetsAt, now)}); no compaction in native mode`)
     lines.push(`options   fiveHourResume=${cfg.ownsFiveHour ? 'mod' : 'native'} weeklyResume=${cfg.resumesWeekly ? 'on' : 'off'} autoPause=${cfg.autoPauseAt ?? 'off'}`)
     return { text: lines.join('\n') }
+  })
+
+  on('command.run', { command: 'htgr-gate' }, async ($, e) => {
+    const now = await $.clock.now()
+    const arg = e.args.trim().toLowerCase()
+    const current = await gateOff($, now)
+    const want = arg === '' ? (current ? 'on' : 'off') : arg
+    if (want === 'on') {
+      if (!current) return { text: 'The agent-pool gate is already on.' }
+      await $.store.delete(GATE_OFF_KEY)
+      s.off = null
+      // Re-read at once: a window already at its gate tier closes the gate now, with its note.
+      await recheck($)
+      return { text: `Agent-pool gate switched on${s.gated ? ' and closed: no new subagents until the window resets' : ''}.` }
+    }
+    let until: number | null
+    if (want === 'off') until = null
+    else if (want === 'reset') {
+      const five = effective((await $.session.usage()).rateLimits, now).find(x => x.kind === 'five_hour' && x.resetsAt !== undefined && x.resetsAt > now)
+      if (!five?.resetsAt) return { text: 'No upcoming 5-hour reset is known yet. Use /htgr-gate off, and /htgr-gate on later.' }
+      until = five.resetsAt
+    } else return { text: `"${e.args.trim()}" is not a gate setting: use on, off or reset` }
+    const off: GateOff = { until, at: now }
+    await $.store.set(GATE_OFF_KEY, off)
+    await recheck($)
+    const back = until === null ? '/htgr-gate on switches it back' : 'it switches back on by itself then, or with /htgr-gate on'
+    return { text: `Agent-pool gate switched off ${offText(off, now)} (every session): new subagents are not gated; ${back}.` }
   })
 
   on('command.run', { command: 'htgr-cancel' }, async $ => {
