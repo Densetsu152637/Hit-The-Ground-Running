@@ -138,7 +138,7 @@ const setStatus = ($: EngineInterface, now: number) => {
     // Plain text is all a status line takes: block meters and colored dots stand in for a drawing.
     const parts = [
       s.credits ? '💳 Gate open (credits)'
-        : s.off ? `⚪ Gate off${s.off.until === null ? '' : ` until ${fmtClock(s.off.until, now)}`}`
+        : s.off ? (s.off.until === null ? '⚪ Gate off' : `⏸ Gate suspended until ${fmtClock(s.off.until, now)}`)
         : s.gated ? '🔴 Gate closed' : '🟢 Gate open',
     ]
     if (s.eff.length === 0) parts.push('waiting for a usage reading')
@@ -435,8 +435,8 @@ export const register: Register = (on, options) => {
       })
       await $.command.register({
         name: 'htgr-gate',
-        description: 'Switch the agent-pool gate on, off, or off until the next 5-hour reset; no argument toggles it (Hit The Ground Running)',
-        argumentHint: '[on | off | reset]',
+        description: 'Switch the agent-pool gate on or off, or suspend it until the next 5-hour reset; no argument toggles it (Hit The Ground Running)',
+        argumentHint: '[on | off | suspend]',
         immediate: true,
       })
       await $.command.register({
@@ -569,7 +569,7 @@ export const register: Register = (on, options) => {
     }
     const off = await gateOff($, now)
     lines.push(`gate      ${s.credits ? 'open: a window is used up, running on usage credits'
-      : off ? `OFF ${offText(off, now)}: spawns are not gated; /htgr-gate on switches it back`
+      : off ? `${off.until === null ? 'OFF' : 'SUSPENDED'} ${offText(off, now)}: spawns are not gated; /htgr-gate on switches it back`
       : s.gated ? 'CLOSED: no new subagents' : 'open'}`)
     const r = s.resume
     if (!r) lines.push('resume    none pending')
@@ -594,16 +594,16 @@ export const register: Register = (on, options) => {
     }
     let until: number | null
     if (want === 'off') until = null
-    else if (want === 'reset') {
+    else if (want === 'suspend') {
       const five = effective((await $.session.usage()).rateLimits, now).find(x => x.kind === 'five_hour' && x.resetsAt !== undefined && x.resetsAt > now)
       if (!five?.resetsAt) return { text: 'No upcoming 5-hour reset is known yet. Use /htgr-gate off, and /htgr-gate on later.' }
       until = five.resetsAt
-    } else return { text: `"${e.args.trim()}" is not a gate setting: use on, off or reset` }
+    } else return { text: `"${e.args.trim()}" is not a gate setting: use on, off or suspend` }
     const off: GateOff = { until, at: now }
     await $.store.set(GATE_OFF_KEY, off)
     await recheck($)
-    const back = until === null ? '/htgr-gate on switches it back' : 'it switches back on by itself then, or with /htgr-gate on'
-    return { text: `Agent-pool gate switched off ${offText(off, now)} (every session): new subagents are not gated; ${back}.` }
+    if (until === null) return { text: `Agent-pool gate switched off ${offText(off, now)} (every session): new subagents are not gated; /htgr-gate on switches it back.` }
+    return { text: `Agent-pool gate suspended ${offText(off, now)}, the 5-hour reset (every session): new subagents are not gated; it switches back on by itself then, or with /htgr-gate on.` }
   })
 
   on('command.run', { command: 'htgr-cancel' }, async $ => {

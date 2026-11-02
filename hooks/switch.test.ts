@@ -53,14 +53,14 @@ test('switch: no argument toggles; a bad argument is refused', async ($, on) => 
   expect(r.store['gate-off']).toBeUndefined()
 })
 
-test('switch: /htgr-gate reset is off until the 5-hour reset, then the gate holds again', async ($, on) => {
+test('switch: /htgr-gate suspend is off until the 5-hour reset, then the gate holds again', async ($, on) => {
   const seen = spawns(on)
   const r = await rig($, on)
   await measure($, r, [five(86, reset5), week(96, resetWk)])
-  const text = await runCommand($, 'htgr-gate', 'reset')
-  expect(text).toContain('switched off until')
+  const text = await runCommand($, 'htgr-gate', 'suspend')
+  expect(text).toContain('suspended until')
   expect(r.store['gate-off']).toEqual({ until: reset5, at: NOW })
-  expect(r.statuses.at(-1)).toContain('⚪ Gate off until')
+  expect(r.statuses.at(-1)).toContain('⏸ Gate suspended until')
   await $.tool.call(AGENT_CALL as never)
   expect(seen.agentCalls).toBe(1)
 
@@ -75,16 +75,16 @@ test('switch: /htgr-gate reset is off until the 5-hour reset, then the gate hold
   expect(seen.agentCalls).toBe(1)
 })
 
-test('switch: /htgr-gate reset without a known 5-hour reset is refused', async ($, on) => {
+test('switch: /htgr-gate suspend without a known 5-hour reset is refused', async ($, on) => {
   const r = await rig($, on)
   await measure($, r, [week(96, resetWk)])
-  expect(await runCommand($, 'htgr-gate', 'reset')).toContain('No upcoming 5-hour reset')
+  expect(await runCommand($, 'htgr-gate', 'suspend')).toContain('No upcoming 5-hour reset')
   expect(r.store['gate-off']).toBeUndefined()
 })
 
 test('switch: /htgr shows the switch', async ($, on) => {
   const r = await rig($, on)
   await measure($, r, [five(86, reset5)])
-  await runCommand($, 'htgr-gate', 'reset')
-  expect(await runCommand($, 'htgr')).toContain('OFF until')
+  await runCommand($, 'htgr-gate', 'suspend')
+  expect(await runCommand($, 'htgr')).toContain('SUSPENDED until')
 })
