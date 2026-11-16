@@ -10,10 +10,13 @@ const ROOT_MD = '# Root\n\nLoad the [delegation default](root-delegation.md#dele
 
 const AGENTS_MD = '# Agent instructions\n\nAt intake load the [root workflow](workflows/AGENTS.root.md). See [process cleanup](#process-cleanup).'
 
+const CLAUDE_MD = '@AGENTS.md\n\nUnder Claude Code, root loads the [Claude Code section](guides/host-adapters.md#claude-code).'
+
 const files = (on: On, extra: Record<string, string> = {}) => {
   const fs: Record<string, string> = {
     [`${ROOT}/workflows/AGENTS.root.md`]: ROOT_MD,
     [`${ROOT}/AGENTS.md`]: AGENTS_MD,
+    [`${ROOT}/CLAUDE.md`]: CLAUDE_MD,
     'C:/Users/me/.claude/CLAUDE.md': '@imports\n\nPersonality: luxion.md\n',
     ...extra,
   }
@@ -35,13 +38,17 @@ test('workflow: a fresh start mandates the intake reads and carries the root wor
   files(on)
   await rig($, on)
   const entries = await start($, 'startup')
-  // Two entries, so neither passes the host's limit on one: the lead with AGENTS.md, then the root workflow.
+  // Two entries, so neither passes the host's limit on one: the lead with CLAUDE.md, then the root workflow.
   expect(entries).toHaveLength(2)
   const [lead, rootEntry] = entries
   expect(lead).toContain('MANDATORY FIRST ACTION')
   expect(lead).toContain(`${ROOT}/personalities/luxion.md`)
-  expect(lead).toContain(`===== ${ROOT}/AGENTS.md =====`)
+  expect(lead).toContain(`===== ${ROOT}/CLAUDE.md (imports expanded) =====`)
+  // `@AGENTS.md` is replaced by its text, and CLAUDE.md's own lines follow.
+  expect(lead).not.toContain('@AGENTS.md')
+  expect(lead).toContain('# Agent instructions')
   expect(lead).toContain(`](${ROOT}/workflows/AGENTS.root.md)`)
+  expect(lead).toContain(`](${ROOT}/guides/host-adapters.md#claude-code)`)
   // An anchor within AGENTS.md stays as it is.
   expect(lead).toContain('](#process-cleanup)')
   expect(rootEntry).toContain(`](${ROOT}/workflows/root-delegation.md#delegation-default)`)
@@ -55,7 +62,8 @@ test('workflow: a compaction or resume asks for a re-read and a restored checkpo
   const [compacted, rootEntry] = await start($, 'compact')
   expect(compacted).toContain('Context was compacted')
   expect(compacted).toContain('restored checkpoint')
-  expect(compacted).toContain('===== D:/Work/Workflow/AGENTS.md =====')
+  expect(compacted).toContain('===== D:/Work/Workflow/CLAUDE.md (imports expanded) =====')
+  expect(compacted).toContain('# Agent instructions')
   expect(rootEntry).toContain('===== D:/Work/Workflow/workflows/AGENTS.root.md =====')
   expect((await start($, 'resume'))[0]).toContain('Context was resumed')
 })
@@ -80,11 +88,20 @@ test('workflow: the personality falls back to the workflow\'s own CLAUDE.md', { 
   expect((await start($, 'startup'))[0]).toContain(`${ROOT}/personalities/yoda.md`)
 })
 
-test('workflow: an unreadable AGENTS.md is named for the model to read; the root workflow still comes', { options: ON }, async ($, on) => {
+test('workflow: an unreadable CLAUDE.md is named for the model to read; the root workflow still comes', { options: ON }, async ($, on) => {
   const fs = files(on)
-  delete fs[`${ROOT}/AGENTS.md`]
+  delete fs[`${ROOT}/CLAUDE.md`]
   await rig($, on)
   const entries = await start($, 'startup')
   expect(entries[1]).toContain('===== D:/Work/Workflow/workflows/AGENTS.root.md =====')
-  expect(entries.at(-1)).toContain(`${ROOT}/AGENTS.md could not be read`)
+  expect(entries.at(-1)).toContain(`${ROOT}/CLAUDE.md could not be read`)
+})
+
+test('workflow: an import that cannot be read stays named in place; a cycle is expanded once', { options: ON }, async ($, on) => {
+  const fs = files(on, { [`${ROOT}/CLAUDE.md`]: '@AGENTS.md\n@missing.md\n@CLAUDE.md' })
+  fs[`${ROOT}/AGENTS.md`] = `${AGENTS_MD}\n@CLAUDE.md`
+  await rig($, on)
+  const [lead] = await start($, 'startup')
+  expect(lead).toContain(`@missing.md (could not be read here: read ${ROOT}/missing.md yourself)`)
+  expect(lead?.split('# Agent instructions').length).toBe(2)
 })

@@ -3,7 +3,7 @@ import type { EngineInterface, Register, SessionRateLimit, Timer } from 'claude-
 import {
   COMPACT_ABOVE, GATE, LABEL, MAX_REARMS, SHORT, WARN,
   atGate, contextPercent, effective, exhausted, fmtClock, fmtDuration, gating, jitter, levelOf, meter, parseWhen, pct,
-  personalityOf, workflowContext,
+  expandImports, personalityOf, workflowContext,
 } from './logic'
 import type { Effective, Kind } from './logic'
 
@@ -300,12 +300,14 @@ const workflowNote = async ($: EngineInterface, source: string): Promise<string[
   if (!root) return []
   let rootText: string
   try { rootText = await $.fs.read(`${root}/workflows/AGENTS.root.md`) as string } catch {
-    return [`${TAG} Workflow loader: ${root}/workflows/AGENTS.root.md could not be read. Read it and ${root}/AGENTS.md yourself before acting, as the top-level root.`]
+    return [`${TAG} Workflow loader: ${root}/workflows/AGENTS.root.md could not be read. Read it and ${root}/CLAUDE.md yourself before acting, as the top-level root.`]
   }
-  let agentsText: string | undefined
-  try { agentsText = await $.fs.read(`${root}/AGENTS.md`) as string } catch { /* named below instead */ }
-  const entries = workflowContext(source, root, rootText, await findPersonality($, root), agentsText)
-  if (agentsText === undefined) entries.push(`${TAG} Workflow loader: ${root}/AGENTS.md could not be read. Read it yourself before acting.`)
+  // The top CLAUDE.md points on to the rest (`@AGENTS.md` and its own notes): its imports come inline.
+  const read = async (path: string) => (await $.fs.read(path)) as string
+  let topText: string | undefined
+  try { topText = await expandImports(await read(`${root}/CLAUDE.md`), root, read) } catch { /* named below instead */ }
+  const entries = workflowContext(source, root, rootText, await findPersonality($, root), topText)
+  if (topText === undefined) entries.push(`${TAG} Workflow loader: ${root}/CLAUDE.md could not be read. Read it and the files it imports yourself before acting.`)
   return entries
 }
 
