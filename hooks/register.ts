@@ -51,14 +51,13 @@ type Resume = {
 type Tier = { resets: number; level: number }
 
 /**
- * The switch on the gate, shared by every session: off until `until` (epoch ms), or until switched on (null). `auto`
- * marks a suspension the mod set itself because usage ran out.
+ * The switch on the gate, kept per session (other sessions keep their own): off until `until` (epoch ms), or until
+ * switched on (null). `auto` marks a suspension the mod set itself because this session's usage ran out.
  */
 type GateOff = { until: number | null; at: number; auto?: boolean }
 
-const GATE_OFF_KEY = 'gate-off'
-/** The 5-hour reset of a period in which the person switched an automatic suspension back on: none again then. */
-const AUTO_SKIP_KEY = 'gate-auto-skip'
+/** Keys of the switch shared by every session before it became per-session: removed on start. */
+const LEGACY_GATE_KEYS = ['gate-off', 'gate-auto-skip']
 
 const isGateOff = (v: unknown): v is GateOff => {
   const g = v as GateOff | null
@@ -108,6 +107,9 @@ const cfg = { ownsFiveHour: false, resumesWeekly: true, autoPauseAt: null as num
 
 const resumeKey = () => `resume:${s.sid}`
 const tiersKey = () => `tiers:${s.sid}`
+const gateOffKey = () => `gate-off:${s.sid}`
+/** The 5-hour reset of a period in which the person switched an automatic suspension back on: none again then. */
+const autoSkipKey = () => `gate-auto-skip:${s.sid}`
 
 const toast = ($: EngineInterface, text: string, timeoutMs = 8000) => {
   try { $.ui.toast(text, { timeoutMs }) } catch { /* a surface without toasts */ }
@@ -125,12 +127,13 @@ const gateText = (windows: readonly Effective[], now: number): string =>
 const offText = (off: GateOff, now: number): string =>
   off.until === null ? 'until switched back on' : `until ${fmtClock(off.until, now)}`
 
-/** The switch as stored; an until-reset switch that has lapsed is removed and reads as on. */
+/** This session's switch as stored; an until-reset switch that has lapsed is removed and reads as on. */
 const gateOff = async ($: EngineInterface, now: number): Promise<GateOff | null> => {
-  const saved = await $.store.get(GATE_OFF_KEY)
+  s.sid ||= await $.session.id()
+  const saved = await $.store.get(gateOffKey())
   if (!isGateOff(saved)) return null
   if (saved.until !== null && saved.until <= now) {
-    await $.store.delete(GATE_OFF_KEY)
+    await $.store.delete(gateOffKey())
     return null
   }
   return saved
@@ -179,10 +182,10 @@ const evaluate = async ($: EngineInterface, readings: readonly SessionRateLimit[
   let isAutoSuspended = false
   const five = eff.find(x => x.kind === 'five_hour' && x.resetsAt !== undefined && x.resetsAt > now)
   if (isCredits && off === null && five?.resetsAt !== undefined) {
-    const skip = await $.store.get(AUTO_SKIP_KEY)
+    const skip = await $.store.get(autoSkipKey())
     if (typeof skip !== 'number' || Math.abs(skip - five.resetsAt) > PERIOD_SLACK_MS) {
       off = { until: five.resetsAt, at: now, auto: true }
-      await $.store.set(GATE_OFF_KEY, off)
+      await $.store.set(gateOffKey(), off)
       isAutoSuspended = true
     }
   }
@@ -456,7 +459,7 @@ export const register: Register = (on, options) => {
       })
       await $.command.register({
         name: 'htgr-gate',
-        description: 'Switch the agent-pool gate on or off, or suspend it until the next 5-hour reset; no argument toggles it (Hit The Ground Running)',
+        description: "Switch this session's agent-pool gate on or off, or suspend it until the next 5-hour reset; no argument toggles it (Hit The Ground Running)",
         argumentHint: '[on | off | suspend]',
         immediate: true,
       })
@@ -472,6 +475,7 @@ export const register: Register = (on, options) => {
         s.credits = savedTiers.credits === true
         s.pausedFor = typeof savedTiers.pausedFor === 'number' ? savedTiers.pausedFor : 0
       }
+      for (const key of LEGACY_GATE_KEYS) await $.store.delete(key)
       await rehydrate($)
       await recheck($)
     } catch (err) {
@@ -487,6 +491,9 @@ export const register: Register = (on, options) => {
         // A cleared conversation has nothing to resume; any other end may be resumed later, so its schedule stays stored.
         if (e.reason === 'clear') await $.store.delete(resumeKey())
         await $.store.delete(tiersKey())
+        // The gate switch belongs to this session alone and ends with it.
+        await $.store.delete(gateOffKey())
+        await $.store.delete(autoSkipKey())
       }
       stopTimers()
       s.reopenTimer?.cancel()
@@ -609,8 +616,8 @@ export const register: Register = (on, options) => {
     if (want === 'on') {
       if (!current) return { text: 'The agent-pool gate is already on.' }
       // Switching an automatic suspension back on holds for the rest of its period, so it is not set again at once.
-      if (current.auto && current.until !== null) await $.store.set(AUTO_SKIP_KEY, current.until)
-      await $.store.delete(GATE_OFF_KEY)
+      if (current.auto && current.until !== null) await $.store.set(autoSkipKey(), current.until)
+      await $.store.delete(gateOffKey())
       s.off = null
       // Re-read at once: a window already at its gate tier closes the gate now, with its note.
       await recheck($)
@@ -624,10 +631,10 @@ export const register: Register = (on, options) => {
       until = five.resetsAt
     } else return { text: `"${e.args.trim()}" is not a gate setting: use on, off or suspend` }
     const off: GateOff = { until, at: now }
-    await $.store.set(GATE_OFF_KEY, off)
+    await $.store.set(gateOffKey(), off)
     await recheck($)
-    if (until === null) return { text: `Agent-pool gate switched off ${offText(off, now)} (every session): new subagents are not gated; /htgr-gate on switches it back.` }
-    return { text: `Agent-pool gate suspended ${offText(off, now)}, the 5-hour reset (every session): new subagents are not gated; it switches back on by itself then, or with /htgr-gate on.` }
+    if (until === null) return { text: `Agent-pool gate switched off ${offText(off, now)} (this session only): new subagents are not gated; /htgr-gate on switches it back.` }
+    return { text: `Agent-pool gate suspended ${offText(off, now)}, the 5-hour reset (this session only): new subagents are not gated; it switches back on by itself then, or with /htgr-gate on.` }
   })
 
   on('command.run', { command: 'htgr-cancel' }, async $ => {
