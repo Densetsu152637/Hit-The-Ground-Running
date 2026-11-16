@@ -294,15 +294,19 @@ const findPersonality = async ($: EngineInterface, root: string): Promise<string
   return undefined
 }
 
-/** The loader's context for this start, or null when it is off or the root workflow cannot be read. */
-const workflowNote = async ($: EngineInterface, source: string): Promise<string | null> => {
+/** The loader's context entries for this start; none when it is off. An unreadable file is named for the model to read. */
+const workflowNote = async ($: EngineInterface, source: string): Promise<string[]> => {
   const root = cfg.workflowDir
-  if (!root) return null
+  if (!root) return []
   let rootText: string
   try { rootText = await $.fs.read(`${root}/workflows/AGENTS.root.md`) as string } catch {
-    return `${TAG} Workflow loader: ${root}/workflows/AGENTS.root.md could not be read. Read it yourself before acting, as the top-level root.`
+    return [`${TAG} Workflow loader: ${root}/workflows/AGENTS.root.md could not be read. Read it and ${root}/AGENTS.md yourself before acting, as the top-level root.`]
   }
-  return workflowContext(source, root, rootText, await findPersonality($, root))
+  let agentsText: string | undefined
+  try { agentsText = await $.fs.read(`${root}/AGENTS.md`) as string } catch { /* named below instead */ }
+  const entries = workflowContext(source, root, rootText, await findPersonality($, root), agentsText)
+  if (agentsText === undefined) entries.push(`${TAG} Workflow loader: ${root}/AGENTS.md could not be read. Read it yourself before acting.`)
+  return entries
 }
 
 // ---- pending resume ---------------------------------------------------------------------------------------------
@@ -517,8 +521,8 @@ export const register: Register = (on, options) => {
   on('classic.SessionStart', async ($, e, next) => {
     const r = await next(e)
     try {
-      const text = await workflowNote($, e.source)
-      if (text) return { ...r, additionalContext: [...(r.additionalContext ?? []), text] }
+      const entries = await workflowNote($, e.source)
+      if (entries.length > 0) return { ...r, additionalContext: [...(r.additionalContext ?? []), ...entries] }
     } catch { /* never stand in the way of a start */ }
     return r
   })

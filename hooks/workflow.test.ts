@@ -8,9 +8,12 @@ const ROOT = 'D:/Work/Workflow'
 const ON = { workflowDir: String.raw`D:\Work\Workflow\ `.trim() } as const
 const ROOT_MD = '# Root\n\nLoad the [delegation default](root-delegation.md#delegation-default) and [index](../personalities/README.md).'
 
+const AGENTS_MD = '# Agent instructions\n\nAt intake load the [root workflow](workflows/AGENTS.root.md). See [process cleanup](#process-cleanup).'
+
 const files = (on: On, extra: Record<string, string> = {}) => {
   const fs: Record<string, string> = {
     [`${ROOT}/workflows/AGENTS.root.md`]: ROOT_MD,
+    [`${ROOT}/AGENTS.md`]: AGENTS_MD,
     'C:/Users/me/.claude/CLAUDE.md': '@imports\n\nPersonality: luxion.md\n',
     ...extra,
   }
@@ -31,21 +34,29 @@ const start = async ($: Engine, source: string): Promise<string[]> =>
 test('workflow: a fresh start mandates the intake reads and carries the root workflow with absolute links', { options: ON }, async ($, on) => {
   files(on)
   await rig($, on)
-  const [text] = await start($, 'startup')
-  expect(text).toContain('MANDATORY FIRST ACTION')
-  expect(text).toContain(`${ROOT}/personalities/luxion.md`)
-  expect(text).toContain(`](${ROOT}/workflows/root-delegation.md#delegation-default)`)
-  expect(text).toContain(`](${ROOT}/personalities/README.md)`)
+  const entries = await start($, 'startup')
+  // Two entries, so neither passes the host's limit on one: the lead with AGENTS.md, then the root workflow.
+  expect(entries).toHaveLength(2)
+  const [lead, rootEntry] = entries
+  expect(lead).toContain('MANDATORY FIRST ACTION')
+  expect(lead).toContain(`${ROOT}/personalities/luxion.md`)
+  expect(lead).toContain(`===== ${ROOT}/AGENTS.md =====`)
+  expect(lead).toContain(`](${ROOT}/workflows/AGENTS.root.md)`)
+  // An anchor within AGENTS.md stays as it is.
+  expect(lead).toContain('](#process-cleanup)')
+  expect(rootEntry).toContain(`](${ROOT}/workflows/root-delegation.md#delegation-default)`)
+  expect(rootEntry).toContain(`](${ROOT}/personalities/README.md)`)
   expect((await start($, 'clear'))[0]).toContain('MANDATORY FIRST ACTION')
 })
 
 test('workflow: a compaction or resume asks for a re-read and a restored checkpoint', { options: ON }, async ($, on) => {
   files(on)
   await rig($, on)
-  const [compacted] = await start($, 'compact')
+  const [compacted, rootEntry] = await start($, 'compact')
   expect(compacted).toContain('Context was compacted')
   expect(compacted).toContain('restored checkpoint')
-  expect(compacted).toContain('===== D:/Work/Workflow/workflows/AGENTS.root.md =====')
+  expect(compacted).toContain('===== D:/Work/Workflow/AGENTS.md =====')
+  expect(rootEntry).toContain('===== D:/Work/Workflow/workflows/AGENTS.root.md =====')
   expect((await start($, 'resume'))[0]).toContain('Context was resumed')
 })
 
@@ -67,4 +78,13 @@ test('workflow: the personality falls back to the workflow\'s own CLAUDE.md', { 
   delete fs['C:/Users/me/.claude/CLAUDE.md']
   await rig($, on)
   expect((await start($, 'startup'))[0]).toContain(`${ROOT}/personalities/yoda.md`)
+})
+
+test('workflow: an unreadable AGENTS.md is named for the model to read; the root workflow still comes', { options: ON }, async ($, on) => {
+  const fs = files(on)
+  delete fs[`${ROOT}/AGENTS.md`]
+  await rig($, on)
+  const entries = await start($, 'startup')
+  expect(entries[1]).toContain('===== D:/Work/Workflow/workflows/AGENTS.root.md =====')
+  expect(entries.at(-1)).toContain(`${ROOT}/AGENTS.md could not be read`)
 })
