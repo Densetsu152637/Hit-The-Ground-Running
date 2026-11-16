@@ -1,7 +1,7 @@
 {
   "name": "hit-the-ground-running",
-  "version": "0.7.2",
-  "description": "Hit The Ground Running: pushes the plan's 5-hour and weekly usage to the model, closes the agent-pool gate (no new subagents) near a limit but not on usage credits (switchable off per session, or suspended until the 5-hour reset with /htgr-gate, and suspended automatically when usage runs out), pauses running sessions at 90% of the 5-hour limit, and resumes the session after a cap resets, compacting first when the context is large, and, when workflowDir is set, loads that agent workflow into the model at every session start, clear, compaction and resume.",
+  "version": "0.8.0",
+  "description": "Hit The Ground Running: pushes the plan's 5-hour and weekly usage to the model, closes the agent-pool gate (no new subagents) near a limit but not on usage credits (switchable off per session, or suspended until the 5-hour reset with /htgr-gate, and suspended automatically when usage runs out), pauses running sessions at 90% of the 5-hour limit, and resumes the session after a cap resets, compacting first when the context is large, re-injects your ~/.claude/CLAUDE.md (imports expanded) at every session start, clear, compaction and resume, and with workflowDir set adds that agent workflow's root instructions.",
   "author": {
     "name": "Densetsu152637",
     "url": "https://github.com/Densetsu152637"
@@ -42,8 +42,18 @@
     "workflowDir": {
       "type": "string",
       "title": "Workflow directory",
-      "description": "Absolute path of an Agent-Custom-Workflow checkout. When set, every session start, clear, compaction, resume or fork hands the model its CLAUDE.md (imports expanded) and workflows/AGENTS.root.md and tells it to read its intake owners (and the personality on the 'Personality:' line of ~/.claude/CLAUDE.md or the workflow's CLAUDE.md) before acting. Empty: off.",
+      "description": "Absolute path of an Agent-Custom-Workflow checkout. When set, the loader also hands the model its workflows/AGENTS.root.md (and its CLAUDE.md, when your ~/.claude/CLAUDE.md does not import it) and tells it to read its intake owners and the personality on the 'Personality:' line before acting. Empty: off.",
       "default": ""
+    },
+    "userInstructions": {
+      "type": "string",
+      "title": "Re-inject your CLAUDE.md",
+      "description": "on: every session start, clear, compaction, resume or fork hands the model your ~/.claude/CLAUDE.md with its @ imports expanded, so your own instructions hold for the whole session, workflow or not. off: it does not.",
+      "default": "on",
+      "options": [
+        "on",
+        "off"
+      ]
     }
   },
   "homepage": "https://github.com/Densetsu152637/Hit-The-Ground-Running",

@@ -3,9 +3,9 @@ import type { EngineInterface, Register, SessionRateLimit, Timer } from 'claude-
 import {
   COMPACT_ABOVE, GATE, LABEL, MAX_REARMS, SHORT, WARN,
   atGate, contextPercent, effective, exhausted, fmtClock, fmtDuration, gating, jitter, levelOf, meter, parseWhen, pct,
-  expandImports, personalityOf, workflowContext,
+  expandImports, loaderContext, personalityOf,
 } from './logic'
-import type { Effective, Kind } from './logic'
+import type { Effective, Kind, Workflow } from './logic'
 
 // Hit The Ground Running: pushes the plan's usage readings to the model, closes the agent-pool gate (no new
 // subagents) near a limit, and resumes the session after a cap resets, compacting first when the context is big.
@@ -104,7 +104,7 @@ const freshState = () => ({
 
 let s = freshState()
 
-const cfg = { ownsFiveHour: false, resumesWeekly: true, autoPauseAt: null as number | null, workflowDir: '' }
+const cfg = { ownsFiveHour: false, resumesWeekly: true, autoPauseAt: null as number | null, workflowDir: '', userInstructions: true }
 
 const resumeKey = () => `resume:${s.sid}`
 const tiersKey = () => `tiers:${s.sid}`
@@ -294,21 +294,46 @@ const findPersonality = async ($: EngineInterface, root: string): Promise<string
   return undefined
 }
 
-/** The loader's context entries for this start; none when it is off. An unreadable file is named for the model to read. */
+/**
+ * The loader's context entries for this start; none when both parts are off. The user's ~/.claude/CLAUDE.md comes with
+ * its imports expanded (for this workflow it imports the workflow's CLAUDE.md, which imports AGENTS.md); a workflow's
+ * own CLAUDE.md is added when the user's file does not reach it. An unreadable file is named for the model to read.
+ */
 const workflowNote = async ($: EngineInterface, source: string): Promise<string[]> => {
   const root = cfg.workflowDir
-  if (!root) return []
-  let rootText: string
-  try { rootText = await $.fs.read(`${root}/workflows/AGENTS.root.md`) as string } catch {
-    return [`${TAG} Workflow loader: ${root}/workflows/AGENTS.root.md could not be read. Read it and ${root}/CLAUDE.md yourself before acting, as the top-level root.`]
-  }
-  // The top CLAUDE.md points on to the rest (`@AGENTS.md` and its own notes): its imports come inline.
+  if (!root && !cfg.userInstructions) return []
   const read = async (path: string) => (await $.fs.read(path)) as string
-  let topText: string | undefined
-  try { topText = await expandImports(await read(`${root}/CLAUDE.md`), root, read) } catch { /* named below instead */ }
-  const entries = workflowContext(source, root, rootText, await findPersonality($, root), topText)
-  if (topText === undefined) entries.push(`${TAG} Workflow loader: ${root}/CLAUDE.md could not be read. Read it and the files it imports yourself before acting.`)
-  return entries
+  const home = ((await $.env.get('USERPROFILE')) || (await $.env.get('HOME')) || '').replace(/\\/g, '/').replace(/\/+$/, '')
+  const userPath = home ? `${home}/.claude/CLAUDE.md` : '~/.claude/CLAUDE.md'
+  const notes: string[] = []
+  const seen = new Set<string>()
+  const parts: string[] = []
+  if (cfg.userInstructions && home) {
+    try {
+      parts.push(await expandImports(await read(userPath), `${home}/.claude`, read, 5, seen))
+    } catch { /* no user instructions: nothing to add */ }
+  }
+  let workflow: Workflow | undefined
+  if (root) {
+    try {
+      workflow = { root, rootText: await read(`${root}/workflows/AGENTS.root.md`), personality: await findPersonality($, root) }
+    } catch {
+      notes.push(`${TAG} Workflow loader: ${root}/workflows/AGENTS.root.md could not be read. Read it and ${root}/CLAUDE.md yourself before acting, as the top-level root.`)
+    }
+    // The workflow's CLAUDE.md points on to the rest (`@AGENTS.md`, the host adapter); unless the user's file imported it.
+    const top = `${root}/CLAUDE.md`
+    if (!seen.has(top.toLowerCase())) {
+      seen.add(top.toLowerCase())
+      try {
+        parts.push(`(${top}, imported by the workflow loader)\n${await expandImports(await read(top), root, read, 5, seen)}`)
+      } catch {
+        notes.push(`${TAG} Workflow loader: ${top} could not be read. Read it and the files it imports yourself before acting.`)
+      }
+    }
+  }
+  const userText = parts.length > 0 ? parts.join('\n\n') : undefined
+  if (!userText && !workflow) return notes
+  return [...loaderContext(source, userPath, userText, workflow), ...notes]
 }
 
 // ---- pending resume ---------------------------------------------------------------------------------------------
@@ -473,6 +498,7 @@ export const register: Register = (on, options) => {
   const pauseAt = Number(options.autoPause)
   cfg.autoPauseAt = Number.isFinite(pauseAt) && pauseAt > 0 ? pauseAt : null
   cfg.workflowDir = String(options.workflowDir ?? '').trim().replace(/\\/g, '/').replace(/\/+$/, '')
+  cfg.userInstructions = options.userInstructions !== 'off'
 
   // ---- hooks ------------------------------------------------------------------------------------------------------
 

@@ -165,35 +165,65 @@ export async function expandImports(
   return out.join('\n')
 }
 
-/**
- * The context the workflow loader hands the model at a session start, one entry each so neither passes the host's
- * per-entry limit: what to read before acting with the workflow's top `CLAUDE.md` (its imports expanded), then the
- * root workflow (complete text in context counts as loaded). A fresh session reads its intake owners; a compacted,
- * resumed or forked one re-reads what the summary dropped and sends a restored checkpoint. Without `topText` the first
- * entry is the lead alone.
- */
-export const workflowContext = (
-  source: string, root: string, rootText: string, personality: string | undefined, topText?: string,
-): string[] => {
-  const persona = personality ? `${root}/personalities/${personality}` : 'the personality its selection names'
-  const lead = source === 'startup' || source === 'clear'
-    ? [
-      'MANDATORY FIRST ACTION for the top-level root, before any other tool call, plan, or reply (including one-line answers):',
-      `1. The workflow's CLAUDE.md (its imports expanded) and root workflow (${root}/workflows/AGENTS.root.md) are loaded below; follow both.`,
-      `2. Read in one parallel batch: ${root}/workflows/root-delegation.md, ${root}/personalities/README.md, ${persona}.`,
-      '3. Then load any further owners the root workflow\'s index triggers for the request, and reply in the selected personality.',
-      'Skipping these reads is a workflow violation even when the task looks trivial.',
-    ]
-    : [
-      `Context was ${source === 'compact' ? 'compacted' : source === 'fork' ? 'forked' : 'resumed'}. Summaries are pointers, not rules. Before any substantive work, dispatch, or publication, as the top-level root:`,
-      `1. The CLAUDE.md and root workflow text below is loaded. Re-read root-delegation.md, root-dispatch.md, root-review.md and root-recovery.md under ${root}/workflows/ (and any other owner whose full text is no longer in context).`,
-      `2. Reload ${root}/personalities/README.md and ${persona}, and use the personality in every user-facing reply.`,
-      '3. Follow root-recovery: send one short restored checkpoint (task, constraints, pending work, active leaves, open review gates, gaps).',
-    ]
-  const agents = topText ? ['', `===== ${root}/CLAUDE.md (imports expanded) =====`, topText.trim()] : []
-  const body = absoluteLinks(rootText.trim(), `${root}/workflows`, root)
-  return [
-    [...lead, 'Subagents ignore this message.', ...agents].join('\n'),
-    [`===== ${root}/workflows/AGENTS.root.md =====`, body].join('\n'),
-  ]
+/** The host's limit on one context entry is 10,000 characters: longer text is split at line ends under this. */
+export const ENTRY_MAX = 9_500
+
+/** `text` in pieces of at most `max` characters, cut at line ends where it can be. */
+export function chunk(text: string, max = ENTRY_MAX): string[] {
+  const out: string[] = []
+  let rest = text
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf('\n', max)
+    if (cut <= 0) cut = max
+    out.push(rest.slice(0, cut))
+    rest = rest.slice(cut).replace(/^\n/, '')
+  }
+  if (rest) out.push(rest)
+  return out
 }
+
+export type Workflow = { root: string; rootText: string; personality: string | undefined }
+
+/**
+ * What the loader hands the model at a session start, in entries under the host's per-entry limit: a lead saying what
+ * to do with it, the user's instructions (`~/.claude/CLAUDE.md`, imports expanded) when given, and with a workflow its
+ * root workflow (complete text in context counts as loaded). A fresh session follows them from its first action; a
+ * compacted, resumed or forked one treats them as the rules again, since a summary carries none.
+ */
+export function loaderContext(source: string, userPath: string, userText: string | undefined, workflow?: Workflow): string[] {
+  const isFresh = source === 'startup' || source === 'clear'
+  const how = source === 'compact' ? 'compacted' : source === 'fork' ? 'forked' : 'resumed'
+  const user = userText ? `the user's instructions (${userPath}, imports expanded)` : ''
+  let lead: string[]
+  if (workflow) {
+    const { root, personality } = workflow
+    const persona = personality ? `${root}/personalities/${personality}` : 'the personality its selection names'
+    const loaded = [user, `the root workflow (${root}/workflows/AGENTS.root.md)`].filter(Boolean).join(' and ')
+    lead = isFresh
+      ? [
+        'MANDATORY FIRST ACTION for the top-level root, before any other tool call, plan, or reply (including one-line answers):',
+        `1. ${loaded[0]?.toUpperCase()}${loaded.slice(1)} ${user ? 'are' : 'is'} loaded below; follow ${user ? 'both' : 'it'}.`,
+        `2. Read in one parallel batch: ${root}/workflows/root-delegation.md, ${root}/personalities/README.md, ${persona}.`,
+        '3. Then load any further owners the root workflow\'s index triggers for the request, and reply in the selected personality.',
+        'Skipping these reads is a workflow violation even when the task looks trivial.',
+      ]
+      : [
+        `Context was ${how}. Summaries are pointers, not rules. Before any substantive work, dispatch, or publication, as the top-level root:`,
+        `1. ${loaded[0]?.toUpperCase()}${loaded.slice(1)} below ${user ? 'are' : 'is'} loaded. Re-read root-delegation.md, root-dispatch.md, root-review.md and root-recovery.md under ${root}/workflows/ (and any other owner whose full text is no longer in context).`,
+        `2. Reload ${root}/personalities/README.md and ${persona}, and use the personality in every user-facing reply.`,
+        '3. Follow root-recovery: send one short restored checkpoint (task, constraints, pending work, active leaves, open review gates, gaps).',
+      ]
+  } else {
+    lead = isFresh
+      ? [`The user's own instructions (${userPath}, imports expanded) are below. Follow them from your first action and for the whole session; they rank as the user's explicit instructions.`]
+      : [`Context was ${how}. Summaries are pointers, not rules: the user's own instructions (${userPath}, imports expanded) below are the rules again. Follow them before any further work.`]
+  }
+  const first = [...lead, 'Subagents ignore this message.', ...(userText ? ['', `===== ${userPath} (imports expanded) =====`, userText.trim()] : [])].join('\n')
+  const entries = chunk(first)
+  if (workflow) {
+    const body = absoluteLinks(workflow.rootText.trim(), `${workflow.root}/workflows`, workflow.root)
+    entries.push(...chunk([`===== ${workflow.root}/workflows/AGENTS.root.md =====`, body].join('\n')))
+  }
+  return entries
+}
+

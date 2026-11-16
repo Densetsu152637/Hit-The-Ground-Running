@@ -7,7 +7,7 @@ A Claude Code mod that keeps long, agent-heavy sessions inside the plan's usage 
 - **Auto-pause.** At 90% of the 5-hour limit, every session with a running turn stops and schedules its resume for the 5-hour reset, as `/htgr-pause` would.
 - **Auto-resume.** When a rate-limit stop is a real plan cap, the mod waits for the reset and then sends a clearly labeled resume prompt.
 - **Compaction before resume.** If more than 25% of the context window is in use when the limits have reset, the session is compacted first, with instructions that keep the plan, decisions, subagent assignments, commits and the exact next step.
-- **Workflow loader (optional).** With `workflowDir` set, every session start, clear, compaction, resume or fork hands the model the workflow's root instructions and what to read before acting. See [Workflow loader](#workflow-loader).
+- **Instructions loader.** Every session start, clear, compaction, resume or fork hands the model your `~/.claude/CLAUDE.md` again (imports expanded), so your instructions hold for the whole session; with `workflowDir` set it adds that workflow's root instructions and what to read before acting. See [Instructions loader](#instructions-loader).
 
 ## Tiers and the gate
 
@@ -83,14 +83,18 @@ Recommended: if you want compaction before 5-hour resumes, use `fiveHourResume: 
 
 Set these in the plugin's config menu or under `pluginConfigs` in settings.
 
-## Workflow loader
+## Instructions loader
 
-Off unless the `workflowDir` option holds the absolute path of an [Agent-Custom-Workflow](https://github.com/Densetsu152637/Agent-Custom-Workflow)-style checkout. When it is set, the mod answers the main session's `SessionStart` with extra context:
+Claude Code loads `~/.claude/CLAUDE.md` at the start, but a long session drifts from it, and a compaction summary carries none of its rules. So at every session start, `/clear`, compaction, resume or fork, the mod answers the main session's `SessionStart` with that file again, as extra context. Subagents start through `SubagentStart` and never get it.
 
-- **Start or `/clear`:** a mandatory first action. The model must read `workflows/root-delegation.md`, `personalities/README.md` and the selected personality before any other tool call or reply.
-- **Compaction, resume or fork:** a recovery instruction. The model re-reads the root owners the summary dropped, reloads the personality and sends a restored checkpoint.
+- **Your instructions (`userInstructions`, on by default).** `~/.claude/CLAUDE.md` with its `@path` import lines replaced by the files they name, as the host reads them: up to five levels deep, each file once, relative links made absolute from each file's folder. An import that cannot be read stays as its line with a note to read it. A fresh session is told to follow it from its first action; a compacted or resumed one, that it is the rules again. `off` turns this part off.
+- **An agent workflow (`workflowDir`, off unless set).** The absolute path of an [Agent-Custom-Workflow](https://github.com/Densetsu152637/Agent-Custom-Workflow)-style checkout. Its `workflows/AGENTS.root.md` comes in full as well, and its own `CLAUDE.md` (with `@AGENTS.md` and the rest) when your file does not import it already. The lead then changes:
+  - **Start or `/clear`:** a mandatory first action. The model must read `workflows/root-delegation.md`, `personalities/README.md` and the selected personality before any other tool call or reply.
+  - **Compaction, resume or fork:** a recovery instruction. The model re-reads the root owners the summary dropped, reloads the personality and sends a restored checkpoint.
 
-Both carry the workflow's top `CLAUDE.md` and `workflows/AGENTS.root.md` in full, with their relative links made absolute, so the shared rules and the root workflow are loaded without relying on the model to open them. `CLAUDE.md`'s `@path` import lines are replaced by the files they name, as the host reads them (`@AGENTS.md` brings in the shared rules), up to five levels deep and each file once; an import that cannot be read stays as its line with a note to read it. They go as two context entries, each under the host's 10,000-character limit for one. If `CLAUDE.md` cannot be read, the model is told to read it and its imports itself. The personality is the first `Personality:` line in `~/.claude/CLAUDE.md`, else in the workflow's own `CLAUDE.md`. If the root file cannot be read, the model is told to read it itself. Subagents start through `SubagentStart` and never get this context.
+  The personality is the first `Personality:` line in `~/.claude/CLAUDE.md`, else in the workflow's `CLAUDE.md`. A workflow file that cannot be read is named for the model to read itself.
+
+Each context entry stays under the host's 10,000-character limit for one: a longer file is split at line ends into several.
 
 ## Keep the computer awake
 
