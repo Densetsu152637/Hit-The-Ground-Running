@@ -116,3 +116,37 @@ export const contextPercent = (ctx: { tokens?: number; window: number; percent?:
   if (ctx.tokens !== undefined && ctx.window > 0) return (ctx.tokens / ctx.window) * 100
   return ctx.percent
 }
+
+/** The `Personality:` line of a CLAUDE.md, e.g. `Personality: luxion.md`; undefined when absent. */
+export const personalityOf = (claudeMd: string): string | undefined => /^\s*Personality:\s*(\S+)/m.exec(claudeMd)?.[1]
+
+/** Makes a workflow file's relative Markdown links absolute, so they resolve from any project. */
+export const absoluteLinks = (text: string, dir: string, root: string): string =>
+  text
+    .replace(/\]\(\.\.\//g, `](${root}/`)
+    .replace(/\]\((?!https?:|[A-Za-z]:|\/|#)/g, `](${dir}/`)
+
+/**
+ * The context the workflow loader hands the model at a session start: what to read before acting, then the root
+ * workflow verbatim (complete text in context counts as loaded). A fresh session reads its intake owners; a compacted,
+ * resumed or forked one re-reads what the summary dropped and sends a restored checkpoint.
+ */
+export const workflowContext = (source: string, root: string, rootText: string, personality: string | undefined): string => {
+  const persona = personality ? `${root}/personalities/${personality}` : 'the personality its selection names'
+  const lead = source === 'startup' || source === 'clear'
+    ? [
+      'MANDATORY FIRST ACTION for the top-level root, before any other tool call, plan, or reply (including one-line answers):',
+      `1. The root workflow (${root}/workflows/AGENTS.root.md) is loaded below; follow it.`,
+      `2. Read in one parallel batch: ${root}/workflows/root-delegation.md, ${root}/personalities/README.md, ${persona}.`,
+      '3. Then load any further owners the root workflow\'s index triggers for the request, and reply in the selected personality.',
+      'Skipping these reads is a workflow violation even when the task looks trivial.',
+    ]
+    : [
+      `Context was ${source === 'compact' ? 'compacted' : source === 'fork' ? 'forked' : 'resumed'}. Summaries are pointers, not rules. Before any substantive work, dispatch, or publication, as the top-level root:`,
+      `1. The root workflow text below is loaded. Re-read root-delegation.md, root-dispatch.md, root-review.md and root-recovery.md under ${root}/workflows/ (and any other owner whose full text is no longer in context).`,
+      `2. Reload ${root}/personalities/README.md and ${persona}, and use the personality in every user-facing reply.`,
+      '3. Follow root-recovery: send one short restored checkpoint (task, constraints, pending work, active leaves, open review gates, gaps).',
+    ]
+  const body = absoluteLinks(rootText.trim(), `${root}/workflows`, root)
+  return [...lead, 'Subagents ignore this message.', '', `===== ${root}/workflows/AGENTS.root.md =====`, body].join('\n')
+}

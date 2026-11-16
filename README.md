@@ -7,6 +7,7 @@ A Claude Code mod that keeps long, agent-heavy sessions inside the plan's usage 
 - **Auto-pause.** At 90% of the 5-hour limit, every session with a running turn stops and schedules its resume for the 5-hour reset, as `/htgr-pause` would.
 - **Auto-resume.** When a rate-limit stop is a real plan cap, the mod waits for the reset and then sends a clearly labeled resume prompt.
 - **Compaction before resume.** If more than 25% of the context window is in use when the limits have reset, the session is compacted first, with instructions that keep the plan, decisions, subagent assignments, commits and the exact next step.
+- **Workflow loader (optional).** With `workflowDir` set, every session start, clear, compaction, resume or fork hands the model the workflow's root instructions and what to read before acting. See [Workflow loader](#workflow-loader).
 
 ## Tiers and the gate
 
@@ -81,6 +82,15 @@ Recommended: if you want compaction before 5-hour resumes, use `fiveHourResume: 
 `weeklyResume` (`on` by default, or `off`) controls weekly caps, which only this mod resumes. `/htgr-pause`, typed or automatic (`autoPause`, above), is always the mod's.
 
 Set these in the plugin's config menu or under `pluginConfigs` in settings.
+
+## Workflow loader
+
+Off unless the `workflowDir` option holds the absolute path of an [Agent-Custom-Workflow](https://github.com/Densetsu152637/Agent-Custom-Workflow)-style checkout. When it is set, the mod answers the main session's `SessionStart` with extra context:
+
+- **Start or `/clear`:** a mandatory first action. The model must read `workflows/root-delegation.md`, `personalities/README.md` and the selected personality before any other tool call or reply.
+- **Compaction, resume or fork:** a recovery instruction. The model re-reads the root owners the summary dropped, reloads the personality and sends a restored checkpoint.
+
+Both carry `workflows/AGENTS.root.md` in full, with its relative links made absolute, so the root workflow is loaded without relying on the model to open it. The personality is the first `Personality:` line in `~/.claude/CLAUDE.md`, else in the workflow's own `CLAUDE.md`. If the root file cannot be read, the model is told to read it itself. Subagents start through `SubagentStart` and never get this context.
 
 ## Keep the computer awake
 

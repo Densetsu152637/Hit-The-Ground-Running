@@ -3,6 +3,7 @@ import type { EngineInterface, Register, SessionRateLimit, Timer } from 'claude-
 import {
   COMPACT_ABOVE, GATE, LABEL, MAX_REARMS, SHORT, WARN,
   atGate, contextPercent, effective, exhausted, fmtClock, fmtDuration, gating, jitter, levelOf, meter, parseWhen, pct,
+  personalityOf, workflowContext,
 } from './logic'
 import type { Effective, Kind } from './logic'
 
@@ -103,7 +104,7 @@ const freshState = () => ({
 
 let s = freshState()
 
-const cfg = { ownsFiveHour: false, resumesWeekly: true, autoPauseAt: null as number | null }
+const cfg = { ownsFiveHour: false, resumesWeekly: true, autoPauseAt: null as number | null, workflowDir: '' }
 
 const resumeKey = () => `resume:${s.sid}`
 const tiersKey = () => `tiers:${s.sid}`
@@ -278,6 +279,32 @@ const gateNow = async ($: EngineInterface): Promise<string | null> => {
   return text ? `${TAG} Agent-pool usage gate is closed (${text}): spawn no new subagents; let running ones finish, or wait for the reset. Messaging a running agent (SendMessage) is still allowed.` : null
 }
 
+// ---- workflow loader ---------------------------------------------------------------------------------------------
+
+/** The first `Personality:` line of the workflow's CLAUDE.md or the user's ~/.claude/CLAUDE.md. */
+const findPersonality = async ($: EngineInterface, root: string): Promise<string | undefined> => {
+  const home = ((await $.env.get('USERPROFILE')) || (await $.env.get('HOME')) || '').replace(/\\/g, '/')
+  for (const path of [home && `${home}/.claude/CLAUDE.md`, `${root}/CLAUDE.md`]) {
+    if (!path) continue
+    try {
+      const found = personalityOf(await $.fs.read(path) as string)
+      if (found) return found
+    } catch { /* missing: try the next */ }
+  }
+  return undefined
+}
+
+/** The loader's context for this start, or null when it is off or the root workflow cannot be read. */
+const workflowNote = async ($: EngineInterface, source: string): Promise<string | null> => {
+  const root = cfg.workflowDir
+  if (!root) return null
+  let rootText: string
+  try { rootText = await $.fs.read(`${root}/workflows/AGENTS.root.md`) as string } catch {
+    return `${TAG} Workflow loader: ${root}/workflows/AGENTS.root.md could not be read. Read it yourself before acting, as the top-level root.`
+  }
+  return workflowContext(source, root, rootText, await findPersonality($, root))
+}
+
 // ---- pending resume ---------------------------------------------------------------------------------------------
 
 const stopTimers = () => {
@@ -439,6 +466,7 @@ export const register: Register = (on, options) => {
   cfg.resumesWeekly = options.weeklyResume !== 'off'
   const pauseAt = Number(options.autoPause)
   cfg.autoPauseAt = Number.isFinite(pauseAt) && pauseAt > 0 ? pauseAt : null
+  cfg.workflowDir = String(options.workflowDir ?? '').trim().replace(/\\/g, '/').replace(/\/+$/, '')
 
   // ---- hooks ------------------------------------------------------------------------------------------------------
 
@@ -481,6 +509,17 @@ export const register: Register = (on, options) => {
     } catch (err) {
       toast($, `Hit The Ground Running could not start (${err instanceof Error ? err.message : String(err)}).`, 15_000)
     }
+    return r
+  })
+
+  // The workflow loader: at every start, clear, compaction, resume or fork of the main session, hand the model the
+  // root workflow and what to read before acting. Subagents start through SubagentStart, so they never get it.
+  on('classic.SessionStart', async ($, e, next) => {
+    const r = await next(e)
+    try {
+      const text = await workflowNote($, e.source)
+      if (text) return { ...r, additionalContext: [...(r.additionalContext ?? []), text] }
+    } catch { /* never stand in the way of a start */ }
     return r
   })
 
